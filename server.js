@@ -349,31 +349,29 @@ async function searchKDSIS(params) {
       const trs = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
       data._debug.trMatchCount = trs.length;
       data._debug.tbodyAllTrCount = tbody.querySelectorAll("tr").length;
+      // KDSIS w2grid 주의: thead의 col_id(column53 등 WebSquare 내부 번호)와
+      // tbody td의 col_id(stdrdKndNm 등 데이터 필드명)는 서로 다른 네임스페이스라
+      // 속성값으로 매칭하면 안 됨. td 순서(colindex) 기반으로 짝짓는다.
+      // 첫 번째 td는 row number 셀(colindex=0, id=_headerRowNumber_...)이므로 제외.
+      const columnNames = headOrder.map((h) => h.name);
       trs.forEach((tr) => {
         const rowData = {};
-        // 우선: col_id 속성이 있는 td를 헤더 순서대로 읽음
-        if (headOrder.length > 0) {
-          headOrder.forEach(({ colId, name }) => {
-            const td = tr.querySelector(`td[col_id="${colId}"]`);
-            if (!td) { rowData[name] = ""; return; }
-            const link = td.querySelector("a");
-            if (link && link.textContent.trim()) { rowData[name] = link.textContent.trim(); return; }
-            const span = td.querySelector("span.w2grid_span");
-            rowData[name] = span ? span.textContent.trim() : td.textContent.trim();
-          });
-        } else {
-          // 폴백: thead가 없으면 td를 인덱스로 순회
-          tr.querySelectorAll("td").forEach((td, idx) => {
-            const key = `col_${idx}`;
-            const link = td.querySelector("a");
-            const span = td.querySelector("span.w2grid_span");
-            rowData[key] = (link?.textContent || span?.textContent || td.textContent || "").trim();
-          });
-          if (data.columns.length === 0) {
-            data.columns = Object.keys(rowData);
-          }
+        const tds = Array.from(tr.querySelectorAll("td")).filter(
+          (td) => !(td.id || "").startsWith("_headerRowNumber_")
+        );
+        tds.forEach((td, idx) => {
+          const name = columnNames[idx] || `col_${idx}`;
+          const link = td.querySelector("a");
+          const span = td.querySelector("span.w2grid_span");
+          let text = "";
+          if (link && link.textContent.trim()) text = link.textContent.trim();
+          else if (span) text = span.textContent.trim();
+          else text = (td.textContent || "").trim();
+          rowData[name] = text;
+        });
+        if (columnNames.length === 0 && data.columns.length === 0) {
+          data.columns = Object.keys(rowData);
         }
-
         // 빈 행 제외
         const hasData = Object.values(rowData).some((v) => v && v.length > 0);
         if (hasData) data.rows.push(rowData);
@@ -412,19 +410,16 @@ async function searchKDSIS(params) {
 
         await page.waitForTimeout(2000);
 
-        // 추가된 행만 파싱 (prevRowCount부터)
+        // 추가된 행만 파싱 (prevRowCount부터) — td 순서 기반 매칭
         const moreResults = await page.evaluate(
           ({ gridId, prevRowCount }) => {
             const thead =
               document.querySelector(`#${gridId}_header_thead`) ||
               document.querySelector(`#${gridId} thead`);
-            const headOrder = [];
+            const columnNames = [];
             if (thead) {
               thead.querySelectorAll("th[col_id]").forEach((th) => {
-                headOrder.push({
-                  colId: th.getAttribute("col_id"),
-                  name: (th.textContent || "").trim(),
-                });
+                columnNames.push((th.textContent || "").trim());
               });
             }
             const tbody = document.querySelector(`#${gridId}_body_tbody`);
@@ -434,13 +429,18 @@ async function searchKDSIS(params) {
             for (let r = prevRowCount; r < allRows.length; r++) {
               const tr = allRows[r];
               const rowData = {};
-              headOrder.forEach(({ colId, name }) => {
-                const td = tr.querySelector(`td[col_id="${colId}"]`);
-                if (!td) { rowData[name] = ""; return; }
+              const tds = Array.from(tr.querySelectorAll("td")).filter(
+                (td) => !(td.id || "").startsWith("_headerRowNumber_")
+              );
+              tds.forEach((td, idx) => {
+                const name = columnNames[idx] || `col_${idx}`;
                 const link = td.querySelector("a");
-                if (link && link.textContent.trim()) { rowData[name] = link.textContent.trim(); return; }
                 const span = td.querySelector("span.w2grid_span");
-                rowData[name] = span ? span.textContent.trim() : td.textContent.trim();
+                let text = "";
+                if (link && link.textContent.trim()) text = link.textContent.trim();
+                else if (span) text = span.textContent.trim();
+                else text = (td.textContent || "").trim();
+                rowData[name] = text;
               });
               if (Object.values(rowData).some((v) => v && v.length > 0)) newRows.push(rowData);
             }
