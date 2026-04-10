@@ -1,0 +1,16 @@
+{
+  "name": "defense-ai-agent",
+  "version": "1.0.0",
+  "description": "국방 AI 어시스턴트 — KDSIS 자동 검색 에이전트",
+  "main": "server.js",
+  "scripts": {
+    "start": "node -r dotenv/config server.js",
+    "start:no-ai": "node server.js",
+    "setup": "npx playwright install chromium"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "playwright": "^1.42.0"
+  }
+}
