@@ -283,61 +283,64 @@ async function searchKDSIS(params) {
     await page.waitForLoadState("networkidle").catch(() => {});
     await page.waitForTimeout(3000);
 
-    // 5) 결과 파싱 — KDSIS WebSquare w2grid 전용 셀렉터
+    // 5) 결과 파싱 — KDSIS WebSquare w2grid (실제 tbody: ggr_stndList)
+    //   칼럼은 하드코딩하지 않고 thead를 읽어서 동적으로 구성
     console.log("[KDSIS] 결과 파싱 중...");
-    const results = await page.evaluate(() => {
+    const GRID_ID = "ggr_stndList";
+    const results = await page.evaluate((gridId) => {
       const data = { rows: [], columns: [], totalCount: 0 };
 
-      // ── 컬럼 정의 (col_id → 한글 헤더 매핑) ──
-      const COL_MAP = [
-        { col_id: "rsltDivs",        name: "결과값종류" },
-        { col_id: "cmpntsMgtNo",     name: "부품관리번호" },
-        { col_id: "nsn",             name: "재고번호" },
-        { col_id: "hanglItmnm",      name: "품명" },
-        { col_id: "aplyEqpNm",       name: "적용장비명" },
-        { col_id: "dtaDvsNm",        name: "품목유형" },
-        { col_id: "specNo",          name: "규격서번호" },
-        { col_id: "dtaNm",           name: "규격서/자료명" },
-        { col_id: "stdrdstatecd",    name: "규격서상태" },
-        { col_id: "stdrdMgtOrganNm", name: "형상관리책임기관" },
-        { col_id: "drwgno",          name: "도면번호" },
-        { col_id: "opnpblYn",        name: "도면상태" },
-        { col_id: "partNumb",        name: "부품번호" },
-        { col_id: "drwgno2",         name: "참조번호" },
-      ];
-
-      data.columns = COL_MAP.map(c => c.name);
+      // ── 헤더에서 칼럼명 추출 ──
+      // WebSquare w2grid는 thead 안 th에 col_id 속성을 둠
+      const headerMap = {}; // col_id → 한글 이름
+      const headOrder = []; // 순서 보존
+      const thead =
+        document.querySelector(`#${gridId}_header_thead`) ||
+        document.querySelector(`#${gridId} thead`);
+      if (thead) {
+        thead.querySelectorAll("th[col_id]").forEach((th) => {
+          const colId = th.getAttribute("col_id");
+          const name = (th.textContent || "").trim() || colId;
+          if (colId && !headerMap[colId]) {
+            headerMap[colId] = name;
+            headOrder.push({ colId, name });
+          }
+        });
+      }
+      data.columns = headOrder.map((c) => c.name);
 
       // ── tbody 행 파싱 ──
-      const tbody = document.querySelector("#ggr_masterSrchList_body_tbody");
+      const tbody = document.querySelector(`#${gridId}_body_tbody`);
       if (!tbody) return data;
 
-      const rows = tbody.querySelectorAll("tr.grid_body_row");
-      rows.forEach((tr) => {
+      const trs = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+      trs.forEach((tr) => {
         const rowData = {};
-        COL_MAP.forEach((col, colIdx) => {
-          const td = tr.querySelector(`td[col_id="${col.col_id}"]`);
-          if (!td) { rowData[col.name] = ""; return; }
-
-          // 링크 셀: a 태그 텍스트 추출
-          const link = td.querySelector("a");
-          if (link && link.textContent.trim()) {
-            rowData[col.name] = link.textContent.trim();
-            return;
+        // 우선: col_id 속성이 있는 td를 헤더 순서대로 읽음
+        if (headOrder.length > 0) {
+          headOrder.forEach(({ colId, name }) => {
+            const td = tr.querySelector(`td[col_id="${colId}"]`);
+            if (!td) { rowData[name] = ""; return; }
+            const link = td.querySelector("a");
+            if (link && link.textContent.trim()) { rowData[name] = link.textContent.trim(); return; }
+            const span = td.querySelector("span.w2grid_span");
+            rowData[name] = span ? span.textContent.trim() : td.textContent.trim();
+          });
+        } else {
+          // 폴백: thead가 없으면 td를 인덱스로 순회
+          tr.querySelectorAll("td").forEach((td, idx) => {
+            const key = `col_${idx}`;
+            const link = td.querySelector("a");
+            const span = td.querySelector("span.w2grid_span");
+            rowData[key] = (link?.textContent || span?.textContent || td.textContent || "").trim();
+          });
+          if (data.columns.length === 0) {
+            data.columns = Object.keys(rowData);
           }
-
-          // 일반 셀: span.w2grid_span 텍스트 추출
-          const span = td.querySelector("span.w2grid_span");
-          if (span) {
-            rowData[col.name] = span.textContent.trim();
-            return;
-          }
-
-          rowData[col.name] = td.textContent.trim();
-        });
+        }
 
         // 빈 행 제외
-        const hasData = Object.values(rowData).some(v => v.length > 0);
+        const hasData = Object.values(rowData).some((v) => v && v.length > 0);
         if (hasData) data.rows.push(rowData);
       });
 
@@ -351,69 +354,67 @@ async function searchKDSIS(params) {
       }
 
       return data;
-    });
+    }, GRID_ID);
 
     // 6) 무한 스크롤 — 추가 데이터 로딩 (최대 3회 스크롤)
+    //   매 스크롤마다 thead를 다시 읽어서 동적 파싱 — col_id 하드코딩 없음
     const MAX_SCROLLS = 3;
     if (results.rows.length > 0 && results.totalCount > results.rows.length) {
       console.log(`[KDSIS] 무한 스크롤 시작 (현재 ${results.rows.length}건 / 총 ${results.totalCount}건)`);
 
       for (let i = 0; i < MAX_SCROLLS; i++) {
-        const prevCount = results.rows.length;
-
         // 그리드 데이터 영역을 맨 아래로 스크롤
-        await page.evaluate(() => {
-          const dataLayer = document.querySelector("#ggr_masterSrchList_dataLayer");
-          if (dataLayer) {
-            dataLayer.scrollTop = dataLayer.scrollHeight;
-          }
-        });
+        await page.evaluate((gridId) => {
+          const dataLayer =
+            document.querySelector(`#${gridId}_dataLayer`) ||
+            document.querySelector(`#${gridId}_body_scroll`) ||
+            document.querySelector(`#${gridId}`);
+          if (dataLayer) dataLayer.scrollTop = dataLayer.scrollHeight;
+        }, GRID_ID);
 
         await page.waitForTimeout(2000);
 
-        // 추가된 행 파싱
-        const moreResults = await page.evaluate((prevRowCount) => {
-          const COL_MAP = [
-            { col_id: "rsltDivs", name: "결과값종류" },
-            { col_id: "cmpntsMgtNo", name: "부품관리번호" },
-            { col_id: "nsn", name: "재고번호" },
-            { col_id: "hanglItmnm", name: "품명" },
-            { col_id: "aplyEqpNm", name: "적용장비명" },
-            { col_id: "dtaDvsNm", name: "품목유형" },
-            { col_id: "specNo", name: "규격서번호" },
-            { col_id: "dtaNm", name: "규격서/자료명" },
-            { col_id: "stdrdstatecd", name: "규격서상태" },
-            { col_id: "stdrdMgtOrganNm", name: "형상관리책임기관" },
-            { col_id: "drwgno", name: "도면번호" },
-            { col_id: "opnpblYn", name: "도면상태" },
-            { col_id: "partNumb", name: "부품번호" },
-            { col_id: "drwgno2", name: "참조번호" },
-          ];
-          const newRows = [];
-          const tbody = document.querySelector("#ggr_masterSrchList_body_tbody");
-          if (!tbody) return newRows;
-          const allRows = tbody.querySelectorAll("tr.grid_body_row");
-          for (let r = prevRowCount; r < allRows.length; r++) {
-            const tr = allRows[r];
-            const rowData = {};
-            COL_MAP.forEach((col) => {
-              const td = tr.querySelector(`td[col_id="${col.col_id}"]`);
-              if (!td) { rowData[col.name] = ""; return; }
-              const link = td.querySelector("a");
-              if (link && link.textContent.trim()) { rowData[col.name] = link.textContent.trim(); return; }
-              const span = td.querySelector("span.w2grid_span");
-              rowData[col.name] = span ? span.textContent.trim() : td.textContent.trim();
-            });
-            if (Object.values(rowData).some(v => v.length > 0)) newRows.push(rowData);
-          }
-          return newRows;
-        }, results.rows.length);
+        // 추가된 행만 파싱 (prevRowCount부터)
+        const moreResults = await page.evaluate(
+          ({ gridId, prevRowCount }) => {
+            const thead =
+              document.querySelector(`#${gridId}_header_thead`) ||
+              document.querySelector(`#${gridId} thead`);
+            const headOrder = [];
+            if (thead) {
+              thead.querySelectorAll("th[col_id]").forEach((th) => {
+                headOrder.push({
+                  colId: th.getAttribute("col_id"),
+                  name: (th.textContent || "").trim(),
+                });
+              });
+            }
+            const tbody = document.querySelector(`#${gridId}_body_tbody`);
+            if (!tbody) return [];
+            const allRows = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+            const newRows = [];
+            for (let r = prevRowCount; r < allRows.length; r++) {
+              const tr = allRows[r];
+              const rowData = {};
+              headOrder.forEach(({ colId, name }) => {
+                const td = tr.querySelector(`td[col_id="${colId}"]`);
+                if (!td) { rowData[name] = ""; return; }
+                const link = td.querySelector("a");
+                if (link && link.textContent.trim()) { rowData[name] = link.textContent.trim(); return; }
+                const span = td.querySelector("span.w2grid_span");
+                rowData[name] = span ? span.textContent.trim() : td.textContent.trim();
+              });
+              if (Object.values(rowData).some((v) => v && v.length > 0)) newRows.push(rowData);
+            }
+            return newRows;
+          },
+          { gridId: GRID_ID, prevRowCount: results.rows.length }
+        );
 
         if (moreResults.length === 0) {
           console.log(`[KDSIS] 스크롤 ${i + 1}: 추가 데이터 없음, 중단`);
           break;
         }
-
         results.rows.push(...moreResults);
         console.log(`[KDSIS] 스크롤 ${i + 1}: +${moreResults.length}건 (누적 ${results.rows.length}건)`);
       }
@@ -609,14 +610,19 @@ async function diagnosticSearch(params) {
         }
       });
 
-      // 현재 코드가 가정하는 특정 ID의 존재 여부
-      ["spn_listCnt", "ggr_masterSrchList_body_tbody", "ggr_masterSrchList", "ggr_masterSrchList_dataLayer"]
-        .forEach((id) => {
-          const el = document.getElementById(id);
-          result.specificIds[id] = el
-            ? { found: true, text: (el.textContent || "").slice(0, 200) }
-            : { found: false };
-        });
+      // 실제 코드가 사용하는 ID 검증
+      [
+        "spn_listCnt",
+        "ggr_stndList_body_tbody",
+        "ggr_stndList_header_thead",
+        "ggr_stndList_dataLayer",
+        "ggr_stndList",
+      ].forEach((id) => {
+        const el = document.getElementById(id);
+        result.specificIds[id] = el
+          ? { found: true, text: (el.textContent || "").slice(0, 200) }
+          : { found: false };
+      });
 
       // tbody 후보 전체
       document.querySelectorAll("tbody").forEach((tb) => {
@@ -636,19 +642,33 @@ async function diagnosticSearch(params) {
     diag.specificIds = scan.specificIds;
     diag.tbodyCandidates = scan.tbodyCandidates;
 
-    // 7) 현재 코드가 쓰는 tbody 상세 확인
+    // 7) 실제 사용 tbody 상세 + thead 칼럼 구조 확인
     const tbodyInfo = await page.evaluate(() => {
-      const tb = document.querySelector("#ggr_masterSrchList_body_tbody");
-      if (!tb) return { found: false };
-      const rows = tb.querySelectorAll("tr.grid_body_row");
+      const tb = document.querySelector("#ggr_stndList_body_tbody");
+      const thead =
+        document.querySelector("#ggr_stndList_header_thead") ||
+        document.querySelector("#ggr_stndList thead");
+      const columns = [];
+      if (thead) {
+        thead.querySelectorAll("th[col_id]").forEach((th) => {
+          columns.push({
+            colId: th.getAttribute("col_id"),
+            name: (th.textContent || "").trim(),
+          });
+        });
+      }
+      if (!tb) return { found: false, columns };
+      const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
       return {
         found: true,
         rowCount: rows.length,
-        firstRowHtml: rows[0]?.outerHTML.slice(0, 2000) || null,
+        columns,
+        firstRowHtml: rows[0]?.outerHTML.slice(0, 2500) || null,
       };
     });
     diag.gridTbodyFound = tbodyInfo.found;
     diag.gridRowCount = tbodyInfo.rowCount || 0;
+    diag.gridColumns = tbodyInfo.columns || [];
     diag.gridFirstRowHtml = tbodyInfo.firstRowHtml;
 
     diag.currentUrl = page.url();
