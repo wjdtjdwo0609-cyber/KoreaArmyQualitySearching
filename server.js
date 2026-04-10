@@ -309,91 +309,43 @@ async function searchKDSIS(params) {
     console.log("[KDSIS] 결과 파싱 중...");
     const GRID_ID = "ggr_stndList";
     const results = await page.evaluate((gridId) => {
-      const data = { rows: [], columns: [], totalCount: 0, _debug: {} };
+      const data = { rows: [], columns: [], totalCount: 0 };
 
       // ── 헤더에서 칼럼명 추출 ──
-      // WebSquare w2grid는 thead 안 th에 col_id 속성을 둠
-      // thead의 th 순서대로 이름 수집. KDSIS w2grid는 "형상관리책임기관" 같은
-      // 그룹 헤더에 colspan=3을 붙여 하위 3개 데이터 칼럼을 묶는다.
-      // colspan을 펼쳐야 td와 1:1 매칭됨 (콜스팬 2~N은 이름 뒤에 (1),(2)... 붙임).
+      // KDSIS w2grid는 "형상관리책임기관" 같은 그룹 헤더에 colspan=3을 붙여
+      // 하위 3개 데이터 칼럼을 묶는다. colspan을 펼쳐야 td와 1:1 매칭됨.
       const headOrder = [];
       const thead =
         document.querySelector(`#${gridId}_header_thead`) ||
         document.querySelector(`#${gridId} thead`);
       if (thead) {
         thead.querySelectorAll("th[col_id]").forEach((th) => {
-          const colId = th.getAttribute("col_id");
-          const name = (th.textContent || "").trim() || colId;
+          const name = (th.textContent || "").trim() || th.getAttribute("col_id");
           const colspan = parseInt(th.getAttribute("colspan") || "1", 10);
           if (colspan > 1) {
-            for (let i = 0; i < colspan; i++) {
-              headOrder.push({ colId, name: `${name}(${i + 1})` });
-            }
+            for (let i = 0; i < colspan; i++) headOrder.push(`${name}(${i + 1})`);
           } else {
-            headOrder.push({ colId, name });
+            headOrder.push(name);
           }
         });
       }
-      data.columns = headOrder.map((c) => c.name);
+      data.columns = headOrder.slice();
 
       // ── tbody 행 파싱 ──
+      // thead col_id(column53 등)와 td col_id(stdrdKndNm 등)는 서로 다른
+      // 네임스페이스라 속성값으로 매칭하면 안 됨. td 순서 기반으로 짝짓는다.
+      // 첫 번째 td는 row number 셀(id=_headerRowNumber_...)이므로 제외.
       const tbody = document.querySelector(`#${gridId}_body_tbody`);
-      data._debug.theadFound = !!thead;
-      data._debug.theadSelectorUsed = document.querySelector(`#${gridId}_header_thead`)
-        ? `#${gridId}_header_thead`
-        : (document.querySelector(`#${gridId} thead`) ? `#${gridId} thead` : null);
-      data._debug.headOrderLength = headOrder.length;
-      data._debug.headOrderNames = headOrder.map((h) => h.name);
-      // thead 구조 전체 덤프 (multi-row 헤더 진단용)
-      if (thead) {
-        const trs = thead.querySelectorAll("tr");
-        data._debug.theadRowCount = trs.length;
-        data._debug.theadRows = Array.from(trs).map((tr) => ({
-          thCount: tr.querySelectorAll("th").length,
-          thWithColId: tr.querySelectorAll("th[col_id]").length,
-          thNames: Array.from(tr.querySelectorAll("th")).map((th) => ({
-            colId: th.getAttribute("col_id"),
-            colspan: th.getAttribute("colspan"),
-            text: (th.textContent || "").trim().slice(0, 30),
-          })),
-        }));
-      }
-      // 첫 데이터 row의 td 상세 (공백 cell 포함)
-      const firstTr = tbody && tbody.querySelector("tr.grid_body_row, tr[class*='grid_body']");
-      if (firstTr) {
-        const allTds = firstTr.querySelectorAll("td");
-        data._debug.firstRowTdCount = allTds.length;
-        data._debug.firstRowTds = Array.from(allTds).map((td) => ({
-          colIndex: td.getAttribute("colindex"),
-          colId: td.getAttribute("col_id"),
-          id: (td.id || "").slice(0, 50),
-          text: (td.textContent || "").trim().slice(0, 30),
-        }));
-      }
-      data._debug.tbodyFound = !!tbody;
-      if (!tbody) {
-        const anyTbodies = Array.from(document.querySelectorAll("tbody")).map((t) => ({
-          id: t.id || null, rowCount: t.querySelectorAll("tr").length,
-        }));
-        data._debug.allTbodies = anyTbodies.slice(0, 10);
-        return data;
-      }
+      if (!tbody) return data;
 
       const trs = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
-      data._debug.trMatchCount = trs.length;
-      data._debug.tbodyAllTrCount = tbody.querySelectorAll("tr").length;
-      // KDSIS w2grid 주의: thead의 col_id(column53 등 WebSquare 내부 번호)와
-      // tbody td의 col_id(stdrdKndNm 등 데이터 필드명)는 서로 다른 네임스페이스라
-      // 속성값으로 매칭하면 안 됨. td 순서(colindex) 기반으로 짝짓는다.
-      // 첫 번째 td는 row number 셀(colindex=0, id=_headerRowNumber_...)이므로 제외.
-      const columnNames = headOrder.map((h) => h.name);
       trs.forEach((tr) => {
         const rowData = {};
         const tds = Array.from(tr.querySelectorAll("td")).filter(
           (td) => !(td.id || "").startsWith("_headerRowNumber_")
         );
         tds.forEach((td, idx) => {
-          const name = columnNames[idx] || `col_${idx}`;
+          const name = headOrder[idx] || `col_${idx}`;
           const link = td.querySelector("a");
           const span = td.querySelector("span.w2grid_span");
           let text = "";
@@ -402,10 +354,9 @@ async function searchKDSIS(params) {
           else text = (td.textContent || "").trim();
           rowData[name] = text;
         });
-        if (columnNames.length === 0 && data.columns.length === 0) {
+        if (headOrder.length === 0 && data.columns.length === 0) {
           data.columns = Object.keys(rowData);
         }
-        // 빈 행 제외
         const hasData = Object.values(rowData).some((v) => v && v.length > 0);
         if (hasData) data.rows.push(rowData);
       });
@@ -413,15 +364,12 @@ async function searchKDSIS(params) {
       // ── 총 건수 추출 (#spn_listCnt) ──
       const countEl = document.querySelector("#spn_listCnt");
       if (countEl) {
-        data._debug.spnListCntText = (countEl.textContent || "").trim().slice(0, 50);
         const m = countEl.textContent.match(/[\d,]+/);
         if (m) data.totalCount = parseInt(m[0].replace(/,/g, ""));
       } else {
-        data._debug.spnListCntText = null;
         data.totalCount = data.rows.length;
       }
 
-      data._debug.rowsParsed = data.rows.length;
       return data;
     }, GRID_ID);
 
@@ -787,7 +735,6 @@ function formatResultsForChat(params, results) {
       message: `조건 [${searchDesc}]으로 검색했으나 결과가 없습니다. 다른 키워드로 시도해 보세요.`,
       type: "empty",
       searchParams: params,
-      _debug: results._debug || null,
     };
   }
 
@@ -798,7 +745,6 @@ function formatResultsForChat(params, results) {
     columns: results.columns,
     rows: results.rows,
     totalCount: results.totalCount || results.rows.length,
-    _debug: results._debug || null,
   };
 }
 
