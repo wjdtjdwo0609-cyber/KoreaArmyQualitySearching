@@ -313,8 +313,9 @@ async function searchKDSIS(params) {
 
       // ── 헤더에서 칼럼명 추출 ──
       // WebSquare w2grid는 thead 안 th에 col_id 속성을 둠
-      // thead의 th 순서대로 이름 수집. col_id가 중복돼도(예: column59가 두 번)
-      // 실제 td는 각 칼럼 위치에 존재하므로 dedup하면 오히려 칼럼이 밀림.
+      // thead의 th 순서대로 이름 수집. KDSIS w2grid는 "형상관리책임기관" 같은
+      // 그룹 헤더에 colspan=3을 붙여 하위 3개 데이터 칼럼을 묶는다.
+      // colspan을 펼쳐야 td와 1:1 매칭됨 (콜스팬 2~N은 이름 뒤에 (1),(2)... 붙임).
       const headOrder = [];
       const thead =
         document.querySelector(`#${gridId}_header_thead`) ||
@@ -323,7 +324,14 @@ async function searchKDSIS(params) {
         thead.querySelectorAll("th[col_id]").forEach((th) => {
           const colId = th.getAttribute("col_id");
           const name = (th.textContent || "").trim() || colId;
-          headOrder.push({ colId, name });
+          const colspan = parseInt(th.getAttribute("colspan") || "1", 10);
+          if (colspan > 1) {
+            for (let i = 0; i < colspan; i++) {
+              headOrder.push({ colId, name: `${name}(${i + 1})` });
+            }
+          } else {
+            headOrder.push({ colId, name });
+          }
         });
       }
       data.columns = headOrder.map((c) => c.name);
