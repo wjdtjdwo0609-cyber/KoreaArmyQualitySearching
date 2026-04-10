@@ -433,6 +433,234 @@ async function searchKDSIS(params) {
   }
 }
 
+// ── 진단 모드: 페이지 내부 상태 전부 덤프 ─────────────────
+// 목적: "왜 결과가 0건인가"를 원인별로 분리해서 판정
+//   1) 폼 입력이 실제로 반영됐는가 (dropdown 선택 포함)
+//   2) 검색 버튼이 실제로 클릭됐는가 (어떤 셀렉터가 매칭됐는가)
+//   3) 검색 후 페이지에 결과가 있는가 (DOM 스캔)
+//   4) 카운트/tbody 셀렉터가 실제 DOM과 일치하는가
+async function diagnosticSearch(params) {
+  let browser;
+  const consoleErrors = [];
+  const diag = {
+    params,
+    pageLoaded: false,
+    currentUrl: null,
+    fieldFillResults: {},
+    formValuesAfterFill: {},
+    searchButtonTried: [],
+    searchButtonClicked: null,
+    searchButtonCandidates: [],
+    countElements: [],
+    specificIds: {},
+    tbodyCandidates: [],
+    gridTbodyFound: false,
+    gridRowCount: 0,
+    gridFirstRowHtml: null,
+    consoleErrors,
+    screenshotUrl: "/api/screenshot?t=" + Date.now(),
+    error: null,
+  };
+
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const context = await browser.newContext({
+      locale: "ko-KR",
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    });
+    const page = await context.newPage();
+
+    page.on("pageerror", (e) => consoleErrors.push("pageerror: " + e.message));
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push("console.error: " + msg.text());
+    });
+
+    await page.goto(KDSIS_URL, { waitUntil: "networkidle", timeout: 30000 });
+    await page.waitForTimeout(2000);
+    diag.pageLoaded = true;
+    diag.currentUrl = page.url();
+
+    // 1) 폼 입력 + 입력 결과 검증
+    for (const [fieldName, value] of Object.entries(params)) {
+      const config = FIELD_MAP[fieldName];
+      if (!config) {
+        diag.fieldFillResults[fieldName] = { error: "unknown field in FIELD_MAP" };
+        continue;
+      }
+      const sel = `#${config.id}`;
+      try {
+        await page.waitForSelector(sel, { timeout: 5000 });
+        if (config.type === "text") {
+          await page.fill(sel, "");
+          await page.fill(sel, value);
+          await page.dispatchEvent(sel, "change");
+        } else {
+          await page.selectOption(sel, { label: value });
+          await page.dispatchEvent(sel, "change");
+        }
+        const actual = await page.$eval(sel, (el) => el.value);
+        diag.fieldFillResults[fieldName] = {
+          requested: value,
+          actualValue: actual,
+          ok: actual && actual.length > 0,
+        };
+      } catch (err) {
+        diag.fieldFillResults[fieldName] = { requested: value, error: err.message };
+      }
+    }
+
+    // 2) 채워진 폼 전체 상태 스냅샷
+    diag.formValuesAfterFill = await page.evaluate(() => {
+      const ids = [
+        "gee_stdrdKndCd_input_0", "gee_specno", "gee_nsn", "gee_relNsn",
+        "gee_dtaNm", "gee_cmpntsMgtno", "gee_enactOrganCd_input_0",
+        "gee_aplyEqpNm", "gee_drwgno", "stdrdStateCd_input_0",
+      ];
+      const r = {};
+      ids.forEach((id) => {
+        const el = document.getElementById(id);
+        r[id] = el ? (el.value ?? "(no value attr)") : "(no element)";
+      });
+      return r;
+    });
+
+    // 3) 검색 버튼 후보 전체 스캔 (클릭 전)
+    diag.searchButtonCandidates = await page.evaluate(() => {
+      const cands = document.querySelectorAll(
+        'button, input[type="button"], input[type="submit"], a, [role="button"]'
+      );
+      const matches = [];
+      cands.forEach((el) => {
+        const txt = (el.textContent || el.value || "").trim();
+        const id = el.id || "";
+        if (txt === "검색" || (txt.includes("검색") && txt.length < 20) || /search/i.test(id)) {
+          matches.push({
+            tag: el.tagName,
+            id: id || null,
+            class: (el.className || "").slice(0, 80) || null,
+            text: txt.slice(0, 30),
+          });
+        }
+      });
+      return matches.slice(0, 20);
+    });
+
+    // 4) 여러 검색 버튼 셀렉터 순차 시도
+    const buttonSelectors = [
+      "#btn_search1",
+      "#btn_search",
+      "#btnSearch",
+      "#btn_srch",
+      'input[type="button"][value="검색"]',
+      'button:has-text("검색")',
+    ];
+    for (const btnSel of buttonSelectors) {
+      diag.searchButtonTried.push(btnSel);
+      try {
+        const exists = await page.$(btnSel);
+        if (exists) {
+          await page.click(btnSel);
+          diag.searchButtonClicked = btnSel;
+          break;
+        }
+      } catch (e) {
+        /* 다음 후보 */
+      }
+    }
+
+    await page.waitForLoadState("networkidle").catch(() => {});
+    await page.waitForTimeout(3000);
+
+    // 5) 결과 후 스크린샷
+    await page.screenshot({
+      path: path.join(__dirname, "public", "last-search.png"),
+      fullPage: true,
+    });
+
+    // 6) 페이지 전체에서 "N건" 패턴을 가진 요소 전부 찾기 → 진짜 카운트 위치 식별
+    const scan = await page.evaluate(() => {
+      const result = {
+        countElements: [],
+        specificIds: {},
+        tbodyCandidates: [],
+      };
+
+      // "N건" 포함 텍스트 요소 전부 수집
+      const seen = new Set();
+      const all = document.querySelectorAll("*");
+      all.forEach((el) => {
+        const direct = Array.from(el.childNodes)
+          .filter((n) => n.nodeType === 3)
+          .map((n) => n.textContent)
+          .join("")
+          .trim();
+        if (direct && /\d[\d,]*\s*건/.test(direct) && !seen.has(direct + "|" + el.id)) {
+          seen.add(direct + "|" + el.id);
+          result.countElements.push({
+            tag: el.tagName,
+            id: el.id || null,
+            class: (el.className || "").slice(0, 60) || null,
+            text: direct.slice(0, 100),
+          });
+        }
+      });
+
+      // 현재 코드가 가정하는 특정 ID의 존재 여부
+      ["spn_listCnt", "ggr_masterSrchList_body_tbody", "ggr_masterSrchList", "ggr_masterSrchList_dataLayer"]
+        .forEach((id) => {
+          const el = document.getElementById(id);
+          result.specificIds[id] = el
+            ? { found: true, text: (el.textContent || "").slice(0, 200) }
+            : { found: false };
+        });
+
+      // tbody 후보 전체
+      document.querySelectorAll("tbody").forEach((tb) => {
+        if (tb.id || tb.querySelectorAll("tr").length > 0) {
+          result.tbodyCandidates.push({
+            id: tb.id || null,
+            class: (tb.className || "").slice(0, 60) || null,
+            rowCount: tb.querySelectorAll("tr").length,
+            firstRowClass: tb.querySelector("tr")?.className?.slice(0, 60) || null,
+          });
+        }
+      });
+
+      return result;
+    });
+    diag.countElements = scan.countElements;
+    diag.specificIds = scan.specificIds;
+    diag.tbodyCandidates = scan.tbodyCandidates;
+
+    // 7) 현재 코드가 쓰는 tbody 상세 확인
+    const tbodyInfo = await page.evaluate(() => {
+      const tb = document.querySelector("#ggr_masterSrchList_body_tbody");
+      if (!tb) return { found: false };
+      const rows = tb.querySelectorAll("tr.grid_body_row");
+      return {
+        found: true,
+        rowCount: rows.length,
+        firstRowHtml: rows[0]?.outerHTML.slice(0, 2000) || null,
+      };
+    });
+    diag.gridTbodyFound = tbodyInfo.found;
+    diag.gridRowCount = tbodyInfo.rowCount || 0;
+    diag.gridFirstRowHtml = tbodyInfo.firstRowHtml;
+
+    diag.currentUrl = page.url();
+  } catch (err) {
+    diag.error = err.message;
+  } finally {
+    if (browser) await browser.close();
+  }
+
+  return diag;
+}
+
 // ── 검색 결과 → 챗봇 응답 포맷 ──────────────────────────
 function formatResultsForChat(params, results) {
   const searchDesc = Object.entries(params)
@@ -512,6 +740,21 @@ app.post("/api/search/direct", async (req, res) => {
   res.json(response);
 });
 
+// GET/POST /api/debug — 진단 모드 (내부 상태 전부 덤프)
+//   GET:  기본 테스트 쿼리 (규격상태=활성)로 자동 실행
+//   POST: { params: {...} } 로 커스텀 쿼리 지정 가능
+app.all("/api/debug", async (req, res) => {
+  const params =
+    req.method === "POST" && req.body?.params && typeof req.body.params === "object"
+      ? req.body.params
+      : { 규격상태: "활성" };
+
+  console.log(`\n[진단] 시작:`, params);
+  const diag = await diagnosticSearch(params);
+  console.log(`[진단] 완료. tbody=${diag.gridTbodyFound} rows=${diag.gridRowCount} btn=${diag.searchButtonClicked}`);
+  res.json(diag);
+});
+
 // GET /api/screenshot — 마지막 검색 스크린샷 (디버깅용)
 app.get("/api/screenshot", (req, res) => {
   const screenshotPath = path.join(__dirname, "public", "last-search.png");
@@ -536,6 +779,7 @@ app.listen(PORT, () => {
   ║                                               ║
   ║  POST /api/search      — 자연어 검색          ║
   ║  POST /api/search/direct — 필드 직접 지정     ║
+  ║  GET  /api/debug       — 진단 모드 (덤프)     ║
   ║  GET  /api/screenshot  — 마지막 검색 캡처     ║
   ╚═══════════════════════════════════════════════╝
   `);
