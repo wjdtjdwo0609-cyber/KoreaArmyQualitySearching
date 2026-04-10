@@ -197,7 +197,28 @@ async function sendQuery(text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: text }),
     });
-    const data = await res.json();
+
+    // 응답이 JSON이 아닐 수 있으므로 먼저 텍스트로 받고 수동 파싱
+    // (Render 타임아웃/에러 시 HTML 에러 페이지가 올 수 있음)
+    const rawText = await res.text();
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      removeTyping(typingId);
+      const snippet = rawText.slice(0, 300).replace(/\s+/g, " ").trim();
+      addBotMessage(
+        `❌ 서버가 JSON이 아닌 응답을 반환했습니다 (HTTP ${res.status} ${res.statusText}).<br>` +
+        `<div class="error-msg" style="margin-top:.5rem;font-family:var(--mono);font-size:.75rem;white-space:pre-wrap">${esc(snippet)}${rawText.length > 300 ? "…" : ""}</div>` +
+        `<p style="margin-top:.5rem;font-size:.8125rem;color:var(--muted)">` +
+        `원인 추정: Render 타임아웃 / 콜드 스타트 / 메모리 부족. ` +
+        `터미널에서 <code>curl -v .../api/search/direct</code>로 재확인해 보세요.</p>`
+      );
+      setStatus("● 온라인", false);
+      busy = false;
+      scrollBottom();
+      return;
+    }
     removeTyping(typingId);
 
     if (data.type === "success" && data.rows && data.rows.length > 0) {
@@ -209,7 +230,7 @@ async function sendQuery(text) {
     }
   } catch (err) {
     removeTyping(typingId);
-    addBotMessage(`❌ 서버 연결 실패: ${err.message}`);
+    addBotMessage(`❌ 네트워크 에러: ${esc(err.message)}`);
   }
 
   setStatus("● 온라인", false);
