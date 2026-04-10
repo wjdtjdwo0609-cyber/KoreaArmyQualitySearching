@@ -301,15 +301,15 @@ async function searchKDSIS(params) {
     ).catch(() => {
       console.warn("[KDSIS] 그리드 렌더링 대기 타임아웃 (15초) — 계속 진행");
     });
-    // 안정화용 짧은 추가 대기
-    await page.waitForTimeout(500);
+    // 안정화용 추가 대기 — diagnosticSearch가 스크린샷/DOM 스캔으로 우연히 얻던 버퍼와 맞춤
+    await page.waitForTimeout(2500);
 
     // 5) 결과 파싱 — KDSIS WebSquare w2grid (실제 tbody: ggr_stndList)
     //   칼럼은 하드코딩하지 않고 thead를 읽어서 동적으로 구성
     console.log("[KDSIS] 결과 파싱 중...");
     const GRID_ID = "ggr_stndList";
     const results = await page.evaluate((gridId) => {
-      const data = { rows: [], columns: [], totalCount: 0 };
+      const data = { rows: [], columns: [], totalCount: 0, _debug: {} };
 
       // ── 헤더에서 칼럼명 추출 ──
       // WebSquare w2grid는 thead 안 th에 col_id 속성을 둠
@@ -332,9 +332,23 @@ async function searchKDSIS(params) {
 
       // ── tbody 행 파싱 ──
       const tbody = document.querySelector(`#${gridId}_body_tbody`);
-      if (!tbody) return data;
+      data._debug.theadFound = !!thead;
+      data._debug.theadSelectorUsed = document.querySelector(`#${gridId}_header_thead`)
+        ? `#${gridId}_header_thead`
+        : (document.querySelector(`#${gridId} thead`) ? `#${gridId} thead` : null);
+      data._debug.headOrderLength = headOrder.length;
+      data._debug.tbodyFound = !!tbody;
+      if (!tbody) {
+        const anyTbodies = Array.from(document.querySelectorAll("tbody")).map((t) => ({
+          id: t.id || null, rowCount: t.querySelectorAll("tr").length,
+        }));
+        data._debug.allTbodies = anyTbodies.slice(0, 10);
+        return data;
+      }
 
       const trs = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+      data._debug.trMatchCount = trs.length;
+      data._debug.tbodyAllTrCount = tbody.querySelectorAll("tr").length;
       trs.forEach((tr) => {
         const rowData = {};
         // 우선: col_id 속성이 있는 td를 헤더 순서대로 읽음
@@ -368,12 +382,15 @@ async function searchKDSIS(params) {
       // ── 총 건수 추출 (#spn_listCnt) ──
       const countEl = document.querySelector("#spn_listCnt");
       if (countEl) {
+        data._debug.spnListCntText = (countEl.textContent || "").trim().slice(0, 50);
         const m = countEl.textContent.match(/[\d,]+/);
         if (m) data.totalCount = parseInt(m[0].replace(/,/g, ""));
       } else {
+        data._debug.spnListCntText = null;
         data.totalCount = data.rows.length;
       }
 
+      data._debug.rowsParsed = data.rows.length;
       return data;
     }, GRID_ID);
 
@@ -737,6 +754,7 @@ function formatResultsForChat(params, results) {
       message: `조건 [${searchDesc}]으로 검색했으나 결과가 없습니다. 다른 키워드로 시도해 보세요.`,
       type: "empty",
       searchParams: params,
+      _debug: results._debug || null,
     };
   }
 
@@ -747,6 +765,7 @@ function formatResultsForChat(params, results) {
     columns: results.columns,
     rows: results.rows,
     totalCount: results.totalCount || results.rows.length,
+    _debug: results._debug || null,
   };
 }
 
