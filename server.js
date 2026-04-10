@@ -335,6 +335,33 @@ async function searchKDSIS(params) {
         ? `#${gridId}_header_thead`
         : (document.querySelector(`#${gridId} thead`) ? `#${gridId} thead` : null);
       data._debug.headOrderLength = headOrder.length;
+      data._debug.headOrderNames = headOrder.map((h) => h.name);
+      // thead 구조 전체 덤프 (multi-row 헤더 진단용)
+      if (thead) {
+        const trs = thead.querySelectorAll("tr");
+        data._debug.theadRowCount = trs.length;
+        data._debug.theadRows = Array.from(trs).map((tr) => ({
+          thCount: tr.querySelectorAll("th").length,
+          thWithColId: tr.querySelectorAll("th[col_id]").length,
+          thNames: Array.from(tr.querySelectorAll("th")).map((th) => ({
+            colId: th.getAttribute("col_id"),
+            colspan: th.getAttribute("colspan"),
+            text: (th.textContent || "").trim().slice(0, 30),
+          })),
+        }));
+      }
+      // 첫 데이터 row의 td 상세 (공백 cell 포함)
+      const firstTr = tbody && tbody.querySelector("tr.grid_body_row, tr[class*='grid_body']");
+      if (firstTr) {
+        const allTds = firstTr.querySelectorAll("td");
+        data._debug.firstRowTdCount = allTds.length;
+        data._debug.firstRowTds = Array.from(allTds).map((td) => ({
+          colIndex: td.getAttribute("colindex"),
+          colId: td.getAttribute("col_id"),
+          id: (td.id || "").slice(0, 50),
+          text: (td.textContent || "").trim().slice(0, 30),
+        }));
+      }
       data._debug.tbodyFound = !!tbody;
       if (!tbody) {
         const anyTbodies = Array.from(document.querySelectorAll("tbody")).map((t) => ({
