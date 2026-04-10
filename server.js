@@ -811,6 +811,196 @@ app.all("/api/debug", async (req, res) => {
   res.json(diag);
 });
 
+// POST /api/debug/detail — 첫 검색 결과의 상세 팝업 구조 덤프
+//   목적: 첨부파일이 직링크인지 JS 다운로드인지 판정
+//   body: { params: {...} } (없으면 규격상태=활성)
+app.post("/api/debug/detail", async (req, res) => {
+  const params =
+    req.body?.params && typeof req.body.params === "object"
+      ? req.body.params
+      : { 규격상태: "활성" };
+
+  let browser;
+  const diag = {
+    params,
+    searchOk: false,
+    rowClicked: false,
+    newPageOpened: false,
+    popupUrl: null,
+    frames: [],
+    attachmentCandidates: [],
+    attachmentSectionHtml: null,
+    allAnchors: [],
+    onclickHandlers: [],
+    error: null,
+  };
+
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const context = await browser.newContext({
+      locale: "ko-KR",
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    });
+    const page = await context.newPage();
+
+    await page.goto(KDSIS_URL, { waitUntil: "networkidle", timeout: 30000 });
+    await page.waitForTimeout(2000);
+
+    // 검색 실행
+    for (const [fieldName, value] of Object.entries(params)) {
+      const config = FIELD_MAP[fieldName];
+      if (!config) continue;
+      const sel = `#${config.id}`;
+      try {
+        await page.waitForSelector(sel, { timeout: 5000 });
+        if (config.type === "text") {
+          await page.fill(sel, value);
+        } else {
+          await page.selectOption(sel, { label: value });
+        }
+        await page.dispatchEvent(sel, "change");
+      } catch (e) {}
+    }
+    await page.click("#btn_search1");
+    await page.waitForFunction(
+      () => {
+        const tb = document.querySelector("#ggr_stndList_body_tbody");
+        if (tb) {
+          const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+          if (rows.length > 0) return true;
+        }
+        return false;
+      },
+      { timeout: 15000 }
+    ).catch(() => {});
+    await page.waitForTimeout(2000);
+    diag.searchOk = true;
+
+    // 첫 행의 규격서명 링크 클릭. 새 페이지가 열릴 수 있으므로 이벤트 대기.
+    const newPagePromise = context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
+    const clicked = await page.evaluate(() => {
+      const tbody = document.querySelector("#ggr_stndList_body_tbody");
+      if (!tbody) return false;
+      const firstRow = tbody.querySelector("tr.grid_body_row, tr[class*='grid_body']");
+      if (!firstRow) return false;
+      // 규격서명 셀(inputtype=link) 안의 a 태그 찾기
+      const link = firstRow.querySelector("td a, span.w2grid_span a");
+      if (link) { link.click(); return true; }
+      // 없으면 3번째 td를 더블클릭 대신 직접 click 이벤트 dispatch
+      const tds = firstRow.querySelectorAll("td");
+      if (tds[3]) { tds[3].click(); return true; }
+      return false;
+    });
+    diag.rowClicked = clicked;
+
+    await page.waitForTimeout(3000);
+    const newPage = await newPagePromise;
+    const targetPage = newPage || page;
+    if (newPage) {
+      diag.newPageOpened = true;
+      await newPage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+      await newPage.waitForTimeout(2000);
+    }
+    diag.popupUrl = targetPage.url();
+
+    // 모든 frame 정보
+    diag.frames = targetPage.frames().map((f) => ({
+      name: f.name(),
+      url: f.url().slice(0, 150),
+    }));
+
+    // 메인 프레임 + 모든 서브프레임에서 첨부파일 관련 요소 탐색
+    for (const frame of targetPage.frames()) {
+      const found = await frame.evaluate(() => {
+        const result = {
+          frameUrl: location.href.slice(0, 150),
+          attachmentCandidates: [],
+          sectionHtml: null,
+          anchors: [],
+          onclicks: [],
+        };
+        // "첨부", "파일", "다운로드" 텍스트 포함 요소 탐색
+        const keywords = /첨부|파일|download|다운로드/i;
+        const all = document.querySelectorAll("*");
+        all.forEach((el) => {
+          const text = (el.textContent || "").trim();
+          if (text.length > 200) return;
+          if (keywords.test(text) && el.children.length < 5) {
+            result.attachmentCandidates.push({
+              tag: el.tagName,
+              id: el.id || null,
+              class: (el.className || "").toString().slice(0, 80) || null,
+              text: text.slice(0, 100),
+            });
+          }
+        });
+        result.attachmentCandidates = result.attachmentCandidates.slice(0, 20);
+
+        // 첨부 섹션 HTML 추출 시도
+        const sec = Array.from(document.querySelectorAll("*")).find(
+          (el) => /첨부파일/.test((el.textContent || "").slice(0, 50)) && el.children.length > 0
+        );
+        if (sec) {
+          let container = sec;
+          for (let i = 0; i < 4 && container.parentElement; i++) container = container.parentElement;
+          result.sectionHtml = container.outerHTML.slice(0, 4000);
+        }
+
+        // 다운로드로 보이는 a 태그
+        document.querySelectorAll("a").forEach((a) => {
+          const href = a.getAttribute("href") || "";
+          const onclick = a.getAttribute("onclick") || "";
+          const text = (a.textContent || "").trim().slice(0, 50);
+          if (href.match(/\.(pdf|hwp|doc|xls|zip)/i) || /download|다운|첨부/i.test(onclick + text)) {
+            result.anchors.push({ href: href.slice(0, 200), onclick: onclick.slice(0, 200), text });
+          }
+        });
+        result.anchors = result.anchors.slice(0, 30);
+
+        // download/file 관련 onclick 핸들러
+        document.querySelectorAll("[onclick]").forEach((el) => {
+          const onclick = el.getAttribute("onclick") || "";
+          if (/download|file|첨부/i.test(onclick)) {
+            result.onclicks.push({
+              tag: el.tagName,
+              id: el.id || null,
+              text: (el.textContent || "").trim().slice(0, 50),
+              onclick: onclick.slice(0, 200),
+            });
+          }
+        });
+        result.onclicks = result.onclicks.slice(0, 20);
+        return result;
+      }).catch(() => null);
+
+      if (found && (found.attachmentCandidates.length || found.anchors.length || found.onclicks.length || found.sectionHtml)) {
+        diag.attachmentCandidates.push(...found.attachmentCandidates.map((c) => ({ ...c, frame: found.frameUrl })));
+        diag.allAnchors.push(...found.anchors.map((a) => ({ ...a, frame: found.frameUrl })));
+        diag.onclickHandlers.push(...found.onclicks.map((o) => ({ ...o, frame: found.frameUrl })));
+        if (!diag.attachmentSectionHtml && found.sectionHtml) {
+          diag.attachmentSectionHtml = { frame: found.frameUrl, html: found.sectionHtml };
+        }
+      }
+    }
+
+    // 스크린샷
+    await targetPage.screenshot({
+      path: path.join(__dirname, "public", "last-detail.png"),
+      fullPage: true,
+    }).catch(() => {});
+  } catch (err) {
+    diag.error = err.message;
+  } finally {
+    if (browser) await browser.close();
+  }
+
+  res.json(diag);
+});
+
 // GET /api/screenshot — 마지막 검색 스크린샷 (디버깅용)
 app.get("/api/screenshot", (req, res) => {
   const screenshotPath = path.join(__dirname, "public", "last-search.png");
