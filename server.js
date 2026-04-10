@@ -279,9 +279,30 @@ async function searchKDSIS(params) {
     await page.click("#btn_search1");
 
     // 4) 결과 로딩 대기
-    // WebSquare 그리드는 비동기로 렌더링되므로 네트워크 안정화 + 추가 대기
+    // WebSquare w2grid는 검색 후 비동기로 행을 생성하므로
+    // 고정 타임아웃 대신 "실제로 행이 나타날 때까지" 명시적으로 기다림
     await page.waitForLoadState("networkidle").catch(() => {});
-    await page.waitForTimeout(3000);
+    await page.waitForFunction(
+      () => {
+        const tb = document.querySelector("#ggr_stndList_body_tbody");
+        if (tb) {
+          const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+          if (rows.length > 0) return true;
+        }
+        // 결과가 0건인 경우에도 무한 대기하지 않도록 카운트 요소 확인
+        const cnt = document.querySelector("#spn_listCnt");
+        if (cnt) {
+          const txt = (cnt.textContent || "").trim();
+          if (/^0건?$/.test(txt) || txt === "0") return true;
+        }
+        return false;
+      },
+      { timeout: 15000 }
+    ).catch(() => {
+      console.warn("[KDSIS] 그리드 렌더링 대기 타임아웃 (15초) — 계속 진행");
+    });
+    // 안정화용 짧은 추가 대기
+    await page.waitForTimeout(500);
 
     // 5) 결과 파싱 — KDSIS WebSquare w2grid (실제 tbody: ggr_stndList)
     //   칼럼은 하드코딩하지 않고 thead를 읽어서 동적으로 구성
@@ -574,7 +595,24 @@ async function diagnosticSearch(params) {
     }
 
     await page.waitForLoadState("networkidle").catch(() => {});
-    await page.waitForTimeout(3000);
+    // 그리드 행이 실제로 나타날 때까지 대기 (searchKDSIS와 동일 정책)
+    await page.waitForFunction(
+      () => {
+        const tb = document.querySelector("#ggr_stndList_body_tbody");
+        if (tb) {
+          const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+          if (rows.length > 0) return true;
+        }
+        const cnt = document.querySelector("#spn_listCnt");
+        if (cnt) {
+          const txt = (cnt.textContent || "").trim();
+          if (/^0건?$/.test(txt) || txt === "0") return true;
+        }
+        return false;
+      },
+      { timeout: 15000 }
+    ).catch(() => {});
+    await page.waitForTimeout(500);
 
     // 5) 결과 후 스크린샷
     await page.screenshot({
