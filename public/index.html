@@ -49,17 +49,53 @@
     .search-params{display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.75rem}
     .param-tag{font-size:.6875rem;padding:2px 8px;background:rgba(37,99,235,.08);color:var(--primary);border-radius:var(--r-full);font-weight:500}
 
-    /* Result table */
+    /* Result — card + table hybrid */
     .result-wrap{width:100%;margin:.75rem 0}
     .result-intro{font-size:.9375rem;margin-bottom:.75rem}
     .result-intro strong{color:var(--primary)}
-    .result-table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;font-size:.8125rem}
+    .result-toolbar{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap}
+    .chip{font-size:.75rem;padding:4px 10px;border-radius:var(--r-full);font-weight:500;background:var(--surface-alt);color:var(--text)}
+    .chip-count{background:rgba(37,99,235,.1);color:var(--primary)}
+    .view-toggle{margin-left:auto;font-size:.75rem;padding:4px 10px;border:1px solid var(--border);background:var(--surface);border-radius:var(--r-sm);cursor:pointer;color:var(--muted);font-family:var(--font);transition:all .15s}
+    .view-toggle:hover{background:var(--surface-alt);color:var(--text)}
+
+    /* Cards */
+    .cards{display:grid;gap:.75rem}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:.875rem 1rem;transition:all .15s}
+    .card:hover{border-color:var(--primary-light);box-shadow:var(--sh-sm)}
+    .card-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.375rem;flex-wrap:wrap}
+    .spec-no{font-family:var(--mono);font-size:.8125rem;font-weight:600;color:var(--primary);background:rgba(37,99,235,.08);padding:2px 8px;border-radius:var(--r-sm)}
+    .spec-kind{font-size:.6875rem;color:var(--muted);padding:2px 6px;background:var(--surface-alt);border-radius:var(--r-sm)}
+    .status-badge{font-size:.6875rem;font-weight:600;padding:2px 8px;border-radius:var(--r-full);margin-left:auto}
+    .status-active{background:rgba(16,185,129,.12);color:var(--green-dark)}
+    .status-inactive{background:rgba(107,114,128,.12);color:var(--muted)}
+    .status-transition{background:rgba(245,158,11,.12);color:var(--warning)}
+    .status-abolished{background:rgba(239,68,68,.12);color:var(--error)}
+    .card-title{font-size:.9375rem;font-weight:600;color:var(--text);margin-bottom:.5rem;line-height:1.4}
+    .card-meta{display:flex;flex-wrap:wrap;gap:.375rem .875rem;font-size:.8125rem;color:var(--muted);margin-bottom:.375rem}
+    .card-meta .mi{display:inline-flex;align-items:center;gap:.25rem}
+    .card-meta .mi strong{color:var(--text);font-weight:500}
+    .card-dates{font-size:.75rem;color:var(--muted);padding-top:.375rem;border-top:1px dashed var(--border);margin-top:.375rem}
+    .card-dates span{margin-right:.875rem}
+    .card-more{margin-top:.5rem}
+    .card-more summary{font-size:.75rem;color:var(--primary);cursor:pointer;padding:.25rem 0;user-select:none;list-style:none;display:inline-flex;align-items:center;gap:.25rem}
+    .card-more summary::-webkit-details-marker{display:none}
+    .card-more summary::before{content:"▸";transition:transform .15s;display:inline-block}
+    .card-more[open] summary::before{transform:rotate(90deg)}
+    .card-more dl{display:grid;grid-template-columns:auto 1fr;gap:.375rem .75rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--border);font-size:.75rem}
+    .card-more dt{color:var(--muted);font-weight:500;white-space:nowrap}
+    .card-more dd{color:var(--text);word-break:break-word}
+    .card-more dd.empty{color:var(--border)}
+
+    /* Compact table (fallback/toggle view) */
+    .result-table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;font-size:.75rem;display:block;overflow-x:auto;max-width:100%}
     .result-table thead{background:var(--bg)}
-    .result-table th{padding:.5rem .75rem;text-align:left;font-weight:600;font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--border)}
-    .result-table td{padding:.5rem .75rem;border-bottom:1px solid var(--border);vertical-align:middle}
+    .result-table th{padding:.5rem .625rem;text-align:left;font-weight:600;font-size:.6875rem;color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--border)}
+    .result-table td{padding:.5rem .625rem;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis}
     .result-table tbody tr:last-child td{border-bottom:none}
-    .result-table tbody tr{transition:background .15s}.result-table tbody tr:hover{background:rgba(37,99,235,.04)}
-    .result-count{font-size:.75rem;color:var(--muted);margin-top:.375rem}
+    .result-table tbody tr:hover{background:rgba(37,99,235,.04)}
+    .result-count{font-size:.75rem;color:var(--muted);margin-top:.5rem}
+    .hidden{display:none !important}
 
     /* Spec mono */
     .mono{font-family:var(--mono);font-size:.75rem;color:var(--primary);font-weight:500}
@@ -257,11 +293,37 @@ function addBotMessage(html) {
   scrollBottom();
 }
 
+// 상태 → 배지 클래스
+function statusClass(s) {
+  if (!s) return "";
+  if (s.includes("활성")) return "status-active";
+  if (s.includes("전환")) return "status-transition";
+  if (s.includes("폐지")) return "status-abolished";
+  return "status-inactive";
+}
+
+// 값이 비었는지
+function isEmpty(v) { return v === undefined || v === null || String(v).trim() === ""; }
+
+// 형상관리책임기관(1/2/3) → "상위 > 부서 > 담당" 하나로 합침
+function mergeOrgHierarchy(row) {
+  const parts = [row["형상관리책임기관(1)"], row["형상관리책임기관(2)"], row["형상관리책임기관(3)"]]
+    .map((v) => (v || "").trim()).filter(Boolean);
+  return parts.join(" › ");
+}
+
+// 주요 필드 (헤드라인/카드 상단)
+const PRIMARY_FIELDS = new Set([
+  "규격종류","규격번호","규격서명","상태","제정기관","적용장비명","부품관리번호",
+  "제정일자","최종개정일자","품명","형상관리책임기관(1)","형상관리책임기관(2)","형상관리책임기관(3)",
+]);
+
 function addResultMessage(data) {
+  const uid = "r" + Date.now() + Math.floor(Math.random() * 1000);
   let html = "";
 
-  // Search params tags
-  if (data.searchParams) {
+  // 검색 파라미터 태그
+  if (data.searchParams && Object.keys(data.searchParams).length > 0) {
     html += '<div class="search-params">';
     for (const [k, v] of Object.entries(data.searchParams)) {
       html += `<span class="param-tag">${esc(k)}: ${esc(v)}</span>`;
@@ -269,44 +331,104 @@ function addResultMessage(data) {
     html += "</div>";
   }
 
-  // Result intro
-  html += `<p class="result-intro">🔍 검색 결과 <strong>${data.totalCount}건</strong></p>`;
+  // 툴바 (카운트 + 뷰 토글)
+  html += '<div class="result-toolbar">';
+  html += `<span class="chip chip-count">🔍 총 <strong>${data.totalCount}</strong>건</span>`;
+  html += `<span class="chip">${data.rows.length}건 표시</span>`;
+  html += `<button class="view-toggle" onclick="toggleView('${uid}')">📊 표로 보기</button>`;
+  html += "</div>";
 
-  // Table
-  if (data.columns && data.columns.length > 0) {
-    html += '<div class="result-wrap"><table class="result-table"><thead><tr>';
-    data.columns.forEach((col) => {
-      html += `<th>${esc(col)}</th>`;
-    });
-    html += "</tr></thead><tbody>";
-    data.rows.forEach((row) => {
-      html += "<tr>";
-      data.columns.forEach((col, idx) => {
-        const val = row[col] || row[`col_${idx}`] || "";
-        const cls = idx === 0 ? ' class="mono"' : "";
-        html += `<td${cls}>${esc(val)}</td>`;
-      });
-      html += "</tr>";
-    });
-    html += "</tbody></table>";
-    html += `<p class="result-count">${data.rows.length}건 표시</p>`;
+  // 카드 뷰
+  html += `<div class="cards" id="${uid}-cards">`;
+  data.rows.forEach((row) => {
+    const specNo = row["규격번호"] || "";
+    const specKind = row["규격종류"] || "";
+    const title = row["규격서명"] || row["품명"] || "(제목 없음)";
+    const status = row["상태"] || "";
+    const org = row["제정기관"] || "";
+    const eqp = row["적용장비명"] || "";
+    const part = row["부품관리번호"] || "";
+    const nsn = row["재고번호(NSN)"] || "";
+    const enactDate = row["제정일자"] || "";
+    const revDate = row["최종개정일자"] || "";
+    const orgHierarchy = mergeOrgHierarchy(row);
+
+    html += '<div class="card">';
+    html += '<div class="card-head">';
+    if (specNo) html += `<span class="spec-no">${esc(specNo)}</span>`;
+    if (specKind) html += `<span class="spec-kind">${esc(specKind)}</span>`;
+    if (status) html += `<span class="status-badge ${statusClass(status)}">${esc(status)}</span>`;
     html += "</div>";
-  } else {
-    // Columns unknown — render as key-value cards
-    data.rows.forEach((row, i) => {
-      html += `<div style="padding:.5rem;background:var(--bg);border-radius:var(--r-sm);margin-bottom:.375rem;font-size:.8125rem">`;
-      for (const [k, v] of Object.entries(row)) {
-        if (v) html += `<span style="margin-right:.75rem"><strong>${esc(k)}:</strong> ${esc(v)}</span>`;
-      }
-      html += "</div>";
-    });
-  }
 
-  // Debug screenshot link
+    html += `<div class="card-title">${esc(title)}</div>`;
+
+    html += '<div class="card-meta">';
+    if (org) html += `<span class="mi">🏛️ <strong>${esc(org)}</strong></span>`;
+    if (eqp) html += `<span class="mi">⚙️ ${esc(eqp)}</span>`;
+    if (part) html += `<span class="mi">📦 <span class="mono" style="font-size:.75rem">${esc(part)}</span></span>`;
+    if (nsn) html += `<span class="mi">🔖 NSN ${esc(nsn)}</span>`;
+    html += "</div>";
+
+    if (!isEmpty(enactDate) || !isEmpty(revDate)) {
+      html += '<div class="card-dates">';
+      if (enactDate) html += `<span>📅 제정 <strong style="color:var(--text)">${esc(enactDate)}</strong></span>`;
+      if (revDate) html += `<span>✏️ 최종개정 <strong style="color:var(--text)">${esc(revDate)}</strong></span>`;
+      html += "</div>";
+    }
+
+    // 나머지 필드는 접힌 상세로
+    const secondary = [];
+    if (orgHierarchy) secondary.push(["형상관리책임기관", orgHierarchy]);
+    data.columns.forEach((col) => {
+      if (PRIMARY_FIELDS.has(col)) return;
+      const v = row[col];
+      if (isEmpty(v)) return;
+      secondary.push([col, v]);
+    });
+
+    if (secondary.length > 0) {
+      html += '<details class="card-more"><summary>자세히 보기</summary><dl>';
+      secondary.forEach(([k, v]) => {
+        html += `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`;
+      });
+      html += "</dl></details>";
+    }
+
+    html += "</div>";
+  });
+  html += "</div>";
+
+  // 표 뷰 (숨김 상태)
+  html += `<div class="result-wrap hidden" id="${uid}-table">`;
+  html += '<table class="result-table"><thead><tr>';
+  data.columns.forEach((col) => { html += `<th>${esc(col)}</th>`; });
+  html += "</tr></thead><tbody>";
+  data.rows.forEach((row) => {
+    html += "<tr>";
+    data.columns.forEach((col, idx) => {
+      const val = row[col] || row[`col_${idx}`] || "";
+      html += `<td title="${esc(val)}">${esc(val)}</td>`;
+    });
+    html += "</tr>";
+  });
+  html += "</tbody></table></div>";
+
+  // 스크린샷
   html += `<span class="debug-toggle" onclick="toggleDebug(this)">📸 검색 화면 캡처 보기</span>`;
   html += `<img class="debug-img" src="/api/screenshot?t=${Date.now()}" alt="KDSIS 검색 캡처">`;
 
   addBotMessage(html);
+}
+
+function toggleView(uid) {
+  const cards = document.getElementById(uid + "-cards");
+  const table = document.getElementById(uid + "-table");
+  if (!cards || !table) return;
+  const showingCards = !cards.classList.contains("hidden");
+  cards.classList.toggle("hidden", showingCards);
+  table.classList.toggle("hidden", !showingCards);
+  const btn = cards.parentElement.querySelector(".view-toggle");
+  if (btn) btn.textContent = showingCards ? "🗂️ 카드로 보기" : "📊 표로 보기";
 }
 
 let typingCounter = 0;
