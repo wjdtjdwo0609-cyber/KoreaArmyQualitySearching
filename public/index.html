@@ -161,7 +161,7 @@
         <h3>무엇을 찾으시겠습니까?</h3>
         <p>자연어로 질문하면 KDSIS에서 규격, 부품, 기술자료를 자동으로 검색합니다. 데이터를 저장하지 않고 실시간 조회합니다.</p>
         <div class="prompts" id="prompts">
-          <button class="prompt-card" data-q="구경50미리"><span class="pi">🔍</span>구경50미리</button>
+          <button class="prompt-card" data-q="구경50미리" data-direct-params='{"규격번호":"1005-0409"}'><span class="pi">🔍</span>구경50미리</button>
           <button class="prompt-card" data-q="KDS 1005 규격번호 검색"><span class="pi">📋</span>KDS 1005 규격번호 검색</button>
           <button class="prompt-card" data-q="국방기술품질원 제정 활성 규격 조회"><span class="pi">🏛️</span>국방기술품질원 제정 활성 규격</button>
           <button class="prompt-card" data-q="박격포 적용장비 규격 검색"><span class="pi">📊</span>박격포 적용장비 규격 검색</button>
@@ -171,7 +171,7 @@
         <div class="sample-wrap">
           <div class="sample-label">📄 결과 예시</div>
           <div class="cards" style="max-width:560px;width:100%">
-            <div class="card">
+            <div class="card" style="cursor:pointer" data-sample-params='{"규격번호":"1005-0409"}' data-sample-label="구경50미리" title="클릭하면 이 결과로 실제 검색합니다">
               <div class="card-head">
                 <span class="spec-no">1005-0409</span>
                 <span class="spec-kind">KDS (국방/정식)</span>
@@ -238,7 +238,29 @@ input.addEventListener("keydown", (e) => {
 // ── Prompt cards ──
 document.getElementById("prompts").addEventListener("click", (e) => {
   const card = e.target.closest(".prompt-card");
-  if (card && !busy) sendQuery(card.dataset.q);
+  if (!card || busy) return;
+  // 샘플 프롬프트는 규격번호로 직접 검색 (자연어 파싱 우회 — 100% 재현 보장)
+  if (card.dataset.directParams) {
+    try {
+      const params = JSON.parse(card.dataset.directParams);
+      const label = card.dataset.q || Object.values(params).join(" ");
+      runDirectSearch(params, label);
+      return;
+    } catch {}
+  }
+  sendQuery(card.dataset.q);
+});
+
+// 샘플 카드 자체도 클릭 가능하게. 단 "자세히 보기" 펼침은 제외.
+document.addEventListener("click", (e) => {
+  if (e.target.closest("summary, details")) return;
+  const sample = e.target.closest("[data-sample-params]");
+  if (!sample || busy) return;
+  try {
+    const params = JSON.parse(sample.dataset.sampleParams);
+    const label = sample.dataset.sampleLabel || Object.values(params).join(" ");
+    runDirectSearch(params, label);
+  } catch {}
 });
 
 // ── Form submit ──
@@ -248,6 +270,52 @@ form.addEventListener("submit", (e) => {
   if (!text || busy) return;
   sendQuery(text);
 });
+
+// ── Direct search (필드 명시 — AI 파싱 우회) ──
+async function runDirectSearch(params, displayText) {
+  busy = true;
+  welcome.style.display = "none";
+  addMessage(displayText, "user");
+  input.value = "";
+  input.style.height = "auto";
+  sendBtn.disabled = true;
+  setStatus("KDSIS 검색 중…", true);
+
+  const typingId = addTyping();
+  scrollBottom();
+
+  try {
+    const res = await fetch("/api/search/direct", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ params }),
+    });
+    const rawText = await res.text();
+    let data;
+    try { data = JSON.parse(rawText); }
+    catch {
+      removeTyping(typingId);
+      const snippet = rawText.slice(0, 300).replace(/\s+/g, " ").trim();
+      addBotMessage(
+        `❌ 서버 에러 (HTTP ${res.status}).<div class="error-msg" style="margin-top:.5rem;font-family:var(--mono);font-size:.75rem;white-space:pre-wrap">${esc(snippet)}…</div>`
+      );
+      setStatus("● 온라인", false);
+      busy = false;
+      scrollBottom();
+      return;
+    }
+    removeTyping(typingId);
+    if (data.type === "success" && data.rows?.length > 0) addResultMessage(data);
+    else if (data.type === "error") addBotMessage(`❌ ${data.message}`);
+    else addBotMessage(`🔍 ${data.message || "검색 결과가 없습니다."}`);
+  } catch (err) {
+    removeTyping(typingId);
+    addBotMessage(`❌ 네트워크 에러: ${esc(err.message)}`);
+  }
+  setStatus("● 온라인", false);
+  busy = false;
+  scrollBottom();
+}
 
 // ── Main flow ──
 async function sendQuery(text) {
