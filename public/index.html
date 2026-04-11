@@ -115,6 +115,8 @@
     .prompt-card{display:flex;align-items:center;gap:.5rem;padding:.75rem 1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);cursor:pointer;font-family:var(--font);font-size:.8125rem;color:var(--text);text-align:left;transition:all .15s;box-shadow:var(--sh-sm)}
     .prompt-card:hover{transform:translateY(-2px);box-shadow:var(--sh-md);border-color:var(--primary-light)}
     .prompt-card .pi{font-size:1.25rem;flex-shrink:0;width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:var(--r-sm)}
+    .sample-wrap{margin-top:2rem;width:100%;max-width:560px;display:flex;flex-direction:column;align-items:center;gap:.5rem}
+    .sample-label{font-size:.6875rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
 
     /* Input */
     .input-area{padding:.75rem 1.5rem 1.25rem;background:var(--bg);max-width:calc(800px + 4rem);width:100%;margin:0 auto}
@@ -163,6 +165,40 @@
           <button class="prompt-card" data-q="KDS 1005 규격번호 검색"><span class="pi">📋</span>KDS 1005 규격번호 검색</button>
           <button class="prompt-card" data-q="국방기술품질원 제정 활성 규격 조회"><span class="pi">🏛️</span>국방기술품질원 제정 활성 규격</button>
           <button class="prompt-card" data-q="박격포 적용장비 규격 검색"><span class="pi">📊</span>박격포 적용장비 규격 검색</button>
+        </div>
+
+        <!-- 샘플 결과 미리보기 -->
+        <div class="sample-wrap">
+          <div class="sample-label">📄 결과 예시</div>
+          <div class="cards" style="max-width:560px;width:100%">
+            <div class="card">
+              <div class="card-head">
+                <span class="spec-no">1005-0409</span>
+                <span class="spec-kind">KDS (국방/정식)</span>
+                <span class="status-badge status-active">활성</span>
+              </div>
+              <div class="card-title">구경50미리에레베타(하부)카바</div>
+              <div class="card-meta">
+                <span class="mi">🏛️ <strong>방위사업청</strong></span>
+                <span class="mi">⚙️ 구경50 기관총</span>
+                <span class="mi">📦 <span class="mono" style="font-size:.75rem">1005M52068889</span></span>
+              </div>
+              <div class="card-dates">
+                <span>📅 제정 <strong style="color:var(--text)">1974-12-27</strong></span>
+                <span>✏️ 최종개정 <strong style="color:var(--text)">2017-02-28</strong></span>
+              </div>
+              <details class="card-more">
+                <summary>자세히 보기</summary>
+                <dl>
+                  <dt>형상관리책임기관</dt><dd>방위사업청 › 미래전력사업표준자원관리팀 › 피복/장구류담당2(장구담당)</dd>
+                  <dt>ICS코드</dt><dd>59.080.99</dd>
+                  <dt>공개여부</dt><dd>전체공개</dd>
+                  <dt>최종개정차수</dt><dd>5</dd>
+                  <dt>최종적합성검토일자</dt><dd>2011-02-25</dd>
+                </dl>
+              </details>
+            </div>
+          </div>
         </div>
       </div>
     </div>
