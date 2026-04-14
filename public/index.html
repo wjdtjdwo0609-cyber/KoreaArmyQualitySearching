@@ -18,15 +18,27 @@
     }
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     html{font-size:16px;-webkit-font-smoothing:antialiased}
-    body{font-family:var(--font);font-size:.9375rem;color:var(--text);background:var(--bg);height:100vh;overflow:hidden;line-height:1.6}
+    body{font-family:var(--font);font-size:.9375rem;color:var(--text);background:var(--bg);height:100dvh;min-height:100vh;overflow:hidden;line-height:1.6}
     ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border);border-radius:var(--r-full)}
 
+    /* Focus — WCAG 2.4.7 */
+    :focus{outline:none}
+    :focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:var(--r-sm)}
+    button:focus-visible,.prompt-card:focus-visible,.card:focus-visible,.view-toggle:focus-visible,.reset-btn:focus-visible{outline-offset:3px}
+    summary:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:var(--r-sm)}
+    @media(prefers-reduced-motion:reduce){
+      *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important;scroll-behavior:auto !important}
+    }
+
     /* Layout */
-    .app{display:flex;flex-direction:column;height:100vh}
+    .app{display:flex;flex-direction:column;height:100dvh;min-height:100vh}
     .header{display:flex;align-items:center;gap:1rem;padding:.75rem 1.5rem;background:var(--surface);border-bottom:1px solid var(--border);min-height:56px}
     .header h1{font-size:1.0625rem;font-weight:600;flex:1}
-    .status{font-size:.75rem;color:var(--green);font-weight:500}
+    .status{font-size:.8125rem;color:var(--green);font-weight:500}
     .status.busy{color:var(--warning)}
+    .reset-btn{flex-shrink:0;display:inline-flex;align-items:center;gap:.25rem;font-size:.8125rem;font-weight:500;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:.375rem .625rem;cursor:pointer;font-family:var(--font);transition:all .15s}
+    .reset-btn:hover{color:var(--primary);border-color:var(--primary-light);background:var(--surface-alt)}
+    .reset-btn:disabled{opacity:.5;cursor:not-allowed}
 
     .messages{flex:1;overflow-y:auto;padding:1.5rem 1rem;scroll-behavior:smooth}
 
@@ -47,7 +59,7 @@
     .search-status{display:flex;align-items:center;gap:.5rem;font-size:.8125rem;color:var(--primary);margin-bottom:.75rem;font-weight:500}
     .search-status .spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
     .search-params{display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.75rem}
-    .param-tag{font-size:.6875rem;padding:2px 8px;background:rgba(37,99,235,.08);color:var(--primary);border-radius:var(--r-full);font-weight:500}
+    .param-tag{font-size:.75rem;padding:3px 10px;background:rgba(37,99,235,.08);color:var(--primary);border-radius:var(--r-full);font-weight:500}
 
     /* Result — card + table hybrid */
     .result-wrap{width:100%;margin:.75rem 0}
@@ -64,9 +76,9 @@
     .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:.875rem 1rem;transition:all .15s}
     .card:hover{border-color:var(--primary-light);box-shadow:var(--sh-sm)}
     .card-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.375rem;flex-wrap:wrap}
-    .spec-no{font-family:var(--mono);font-size:.8125rem;font-weight:600;color:var(--primary);background:rgba(37,99,235,.08);padding:2px 8px;border-radius:var(--r-sm)}
-    .spec-kind{font-size:.6875rem;color:var(--muted);padding:2px 6px;background:var(--surface-alt);border-radius:var(--r-sm)}
-    .status-badge{font-size:.6875rem;font-weight:600;padding:2px 8px;border-radius:var(--r-full);margin-left:auto}
+    .spec-no{font-family:var(--mono);font-size:.8125rem;font-weight:600;color:var(--primary);background:rgba(37,99,235,.08);padding:3px 8px;border-radius:var(--r-sm)}
+    .spec-kind{font-size:.75rem;color:var(--muted);padding:3px 8px;background:var(--surface-alt);border-radius:var(--r-sm)}
+    .status-badge{font-size:.75rem;font-weight:600;padding:3px 10px;border-radius:var(--r-full);margin-left:auto}
     .status-active{background:rgba(16,185,129,.12);color:var(--green-dark)}
     .status-inactive{background:rgba(107,114,128,.12);color:var(--muted)}
     .status-transition{background:rgba(245,158,11,.12);color:var(--warning)}
@@ -75,30 +87,30 @@
     .card-meta{display:flex;flex-wrap:wrap;gap:.375rem .875rem;font-size:.8125rem;color:var(--muted);margin-bottom:.375rem}
     .card-meta .mi{display:inline-flex;align-items:center;gap:.25rem}
     .card-meta .mi strong{color:var(--text);font-weight:500}
-    .card-dates{font-size:.75rem;color:var(--muted);padding-top:.375rem;border-top:1px dashed var(--border);margin-top:.375rem}
+    .card-dates{font-size:.8125rem;color:var(--muted);padding-top:.5rem;border-top:1px dashed var(--border);margin-top:.5rem}
     .card-dates span{margin-right:.875rem}
     .card-more{margin-top:.5rem}
-    .card-more summary{font-size:.75rem;color:var(--primary);cursor:pointer;padding:.25rem 0;user-select:none;list-style:none;display:inline-flex;align-items:center;gap:.25rem}
+    .card-more summary{font-size:.8125rem;color:var(--primary);cursor:pointer;padding:.375rem .25rem;user-select:none;list-style:none;display:inline-flex;align-items:center;gap:.25rem;font-weight:500}
     .card-more summary::-webkit-details-marker{display:none}
     .card-more summary::before{content:"▸";transition:transform .15s;display:inline-block}
     .card-more[open] summary::before{transform:rotate(90deg)}
-    .card-more dl{display:grid;grid-template-columns:auto 1fr;gap:.375rem .75rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--border);font-size:.75rem}
+    .card-more dl{display:grid;grid-template-columns:auto 1fr;gap:.5rem .875rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--border);font-size:.8125rem}
     .card-more dt{color:var(--muted);font-weight:500;white-space:nowrap}
     .card-more dd{color:var(--text);word-break:break-word}
     .card-more dd.empty{color:var(--border)}
 
     /* Compact table (fallback/toggle view) */
-    .result-table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;font-size:.75rem;display:block;overflow-x:auto;max-width:100%}
-    .result-table thead{background:var(--bg)}
-    .result-table th{padding:.5rem .625rem;text-align:left;font-weight:600;font-size:.6875rem;color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--border)}
-    .result-table td{padding:.5rem .625rem;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+    .result-table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;font-size:.8125rem;display:block;overflow-x:auto;max-width:100%}
+    .result-table thead{background:var(--bg);position:sticky;top:0}
+    .result-table th{padding:.625rem .75rem;text-align:left;font-weight:600;font-size:.75rem;color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--border)}
+    .result-table td{padding:.625rem .75rem;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis}
     .result-table tbody tr:last-child td{border-bottom:none}
     .result-table tbody tr:hover{background:rgba(37,99,235,.04)}
-    .result-count{font-size:.75rem;color:var(--muted);margin-top:.5rem}
+    .result-count{font-size:.8125rem;color:var(--muted);margin-top:.5rem}
     .hidden{display:none !important}
 
     /* Spec mono */
-    .mono{font-family:var(--mono);font-size:.75rem;color:var(--primary);font-weight:500}
+    .mono{font-family:var(--mono);font-size:.8125rem;color:var(--primary);font-weight:500}
 
     /* Empty / error */
     .empty-state{text-align:center;padding:1.5rem;color:var(--muted)}
@@ -110,68 +122,95 @@
     .welcome-icon{font-size:3.5rem;margin-bottom:1rem;animation:pulse 2s ease-in-out infinite}
     .welcome h3{font-size:1.5rem;font-weight:700;margin-bottom:.375rem;background:linear-gradient(135deg,var(--primary),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
     .welcome p{color:var(--muted);margin-bottom:1.5rem;max-width:480px}
-    .welcome .badge{font-size:.6875rem;padding:4px 12px;background:rgba(16,185,129,.1);color:var(--green-dark);border-radius:var(--r-full);font-weight:600;margin-bottom:1rem}
-    .prompts{display:grid;grid-template-columns:repeat(2,1fr);gap:.75rem;width:100%;max-width:560px}
-    .prompt-card{display:flex;align-items:center;gap:.5rem;padding:.75rem 1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);cursor:pointer;font-family:var(--font);font-size:.8125rem;color:var(--text);text-align:left;transition:all .15s;box-shadow:var(--sh-sm)}
+    .welcome .badge{font-size:.75rem;padding:5px 14px;background:rgba(16,185,129,.1);color:var(--green-dark);border-radius:var(--r-full);font-weight:600;margin-bottom:1rem}
+    .prompts{display:grid;grid-template-columns:repeat(2,1fr);gap:.75rem;width:100%;max-width:640px}
+    .prompt-card{display:flex;align-items:center;gap:.625rem;padding:.875rem 1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);cursor:pointer;font-family:var(--font);font-size:.875rem;color:var(--text);text-align:left;transition:all .15s;box-shadow:var(--sh-sm)}
     .prompt-card:hover{transform:translateY(-2px);box-shadow:var(--sh-md);border-color:var(--primary-light)}
     .prompt-card .pi{font-size:1.25rem;flex-shrink:0;width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:var(--r-sm)}
-    .sample-wrap{margin-top:2rem;width:100%;max-width:560px;display:flex;flex-direction:column;align-items:center;gap:.5rem}
-    .sample-label{font-size:.6875rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
+    .sample-wrap{margin-top:2rem;width:100%;max-width:640px;display:flex;flex-direction:column;align-items:center;gap:.5rem}
+    .sample-label{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
 
     /* Input */
     .input-area{padding:.75rem 1.5rem 1.25rem;background:var(--bg);max-width:calc(800px + 4rem);width:100%;margin:0 auto}
-    .input-form{display:flex;align-items:flex-end;gap:.5rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:.5rem .5rem .5rem 1rem;box-shadow:var(--sh-md);transition:border-color .15s,box-shadow .15s}
+    .input-form{display:flex;align-items:flex-end;gap:.5rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:.625rem .625rem .625rem 1rem;box-shadow:var(--sh-md);transition:border-color .15s,box-shadow .15s}
     .input-form:focus-within{border-color:var(--primary-light);box-shadow:var(--sh-md),0 0 0 3px rgba(37,99,235,.1)}
-    .input-form textarea{flex:1;border:none;outline:none;resize:none;font-family:var(--font);font-size:.9375rem;color:var(--text);background:transparent;line-height:1.5;max-height:120px;padding:.375rem 0}
+    .input-form textarea{flex:1;border:none;outline:none;resize:none;font-family:var(--font);font-size:.9375rem;color:var(--text);background:transparent;line-height:1.5;max-height:120px;padding:.375rem 0;min-height:1.5rem}
     .input-form textarea::placeholder{color:var(--muted)}
     .send-btn{flex-shrink:0;width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:var(--primary);border:none;border-radius:var(--r-sm);color:var(--inverse);cursor:pointer;font-size:1.0625rem;transition:all .15s}
     .send-btn:hover:not(:disabled){background:var(--primary-dark);transform:scale(1.05)}
     .send-btn:disabled{background:var(--border);cursor:not-allowed;opacity:.6}
-    .hint{font-size:.75rem;color:var(--muted);text-align:center;margin-top:.375rem}
+    .hint{font-size:.75rem;color:var(--muted);text-align:center;margin-top:.5rem}
 
     /* Screenshot debug */
-    .debug-toggle{font-size:.75rem;color:var(--muted);cursor:pointer;text-decoration:underline;margin-top:.5rem}
+    .debug-toggle{font-size:.8125rem;color:var(--muted);cursor:pointer;text-decoration:underline;margin-top:.75rem;display:inline-block;padding:.25rem .125rem;background:none;border:none;font-family:var(--font)}
+    .debug-toggle:hover{color:var(--text)}
     .debug-img{max-width:100%;border:1px solid var(--border);border-radius:var(--r-sm);margin-top:.5rem;display:none}
     .debug-img.show{display:block}
+
+    /* sr-only for screen readers */
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
     @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
     @keyframes bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
     @keyframes spin{to{transform:rotate(360deg)}}
 
+    /* Mobile */
     @media(max-width:640px){
       .prompts{grid-template-columns:1fr}
       .msg--user .bubble{max-width:85%}
       .msg--bot .bubble{max-width:95%}
       .input-area{padding:.5rem .75rem .75rem}
+      .header{padding:.625rem 1rem}
+      .header h1{font-size:.9375rem}
+      .reset-btn span:not(.sr-only){display:none}
+      .card-meta{gap:.25rem .75rem}
+    }
+    /* Tablet */
+    @media(min-width:641px) and (max-width:1024px){
+      .msg{max-width:720px}
+      .input-area{max-width:calc(720px + 4rem)}
+    }
+    /* Wide desktop */
+    @media(min-width:1280px){
+      .msg{max-width:920px}
+      .input-area{max-width:calc(920px + 4rem)}
+    }
+    @media(min-width:1600px){
+      .msg{max-width:1080px}
+      .input-area{max-width:calc(1080px + 4rem)}
+      body{font-size:1rem}
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <header class="header">
+    <header class="header" role="banner">
       <h1>🎖️ 국방 AI 어시스턴트 — KDSIS 실시간 검색</h1>
-      <span class="status" id="status">● 온라인</span>
+      <span class="status" id="status" role="status" aria-live="polite">● 온라인</span>
+      <button class="reset-btn" id="resetBtn" type="button" aria-label="새 대화 시작" title="새 대화 시작 (Ctrl+K)">
+        <span aria-hidden="true">＋</span><span>새 대화</span>
+      </button>
     </header>
 
-    <div class="messages" id="messages">
+    <main class="messages" id="messages" role="log" aria-live="polite" aria-label="대화 기록" aria-relevant="additions">
       <div class="welcome" id="welcome">
-        <div class="welcome-icon">🤖</div>
+        <div class="welcome-icon" aria-hidden="true">🤖</div>
         <div class="badge">KDSIS 실시간 연동</div>
         <h3>무엇을 찾으시겠습니까?</h3>
         <p>자연어로 질문하면 KDSIS에서 규격, 부품, 기술자료를 자동으로 검색합니다. 데이터를 저장하지 않고 실시간 조회합니다.</p>
-        <div class="prompts" id="prompts">
-          <button class="prompt-card" data-q="구경50미리" data-direct-params='{"규격번호":"1005-0409"}'><span class="pi">🔍</span>구경50미리</button>
-          <button class="prompt-card" data-q="KDS 1005 규격번호 검색"><span class="pi">📋</span>KDS 1005 규격번호 검색</button>
-          <button class="prompt-card" data-q="국방기술품질원 제정 활성 규격 조회"><span class="pi">🏛️</span>국방기술품질원 제정 활성 규격</button>
-          <button class="prompt-card" data-q="박격포 적용장비 규격 검색"><span class="pi">📊</span>박격포 적용장비 규격 검색</button>
+        <div class="prompts" id="prompts" role="list" aria-label="추천 검색어">
+          <button class="prompt-card" type="button" role="listitem" data-q="구경50미리" data-direct-params='{"규격번호":"1005-0409"}'><span class="pi" aria-hidden="true">🔍</span>구경50미리</button>
+          <button class="prompt-card" type="button" role="listitem" data-q="KDS 1005 규격번호 검색"><span class="pi" aria-hidden="true">📋</span>KDS 1005 규격번호 검색</button>
+          <button class="prompt-card" type="button" role="listitem" data-q="국방기술품질원 제정 활성 규격 조회"><span class="pi" aria-hidden="true">🏛️</span>국방기술품질원 제정 활성 규격</button>
+          <button class="prompt-card" type="button" role="listitem" data-q="박격포 적용장비 규격 검색"><span class="pi" aria-hidden="true">📊</span>박격포 적용장비 규격 검색</button>
         </div>
 
         <!-- 샘플 결과 미리보기 -->
         <div class="sample-wrap">
           <div class="sample-label">📄 결과 예시</div>
-          <div class="cards" style="max-width:560px;width:100%">
-            <div class="card" style="cursor:pointer" data-sample-params='{"규격번호":"1005-0409"}' data-sample-label="구경50미리" title="클릭하면 이 결과로 실제 검색합니다">
+          <div class="cards" style="max-width:640px;width:100%">
+            <div class="card" role="button" tabindex="0" style="cursor:pointer" data-sample-params='{"규격번호":"1005-0409"}' data-sample-label="구경50미리" aria-label="샘플 결과로 검색 실행: 구경50미리" title="클릭하면 이 결과로 실제 검색합니다">
               <div class="card-head">
                 <span class="spec-no">1005-0409</span>
                 <span class="spec-kind">KDS (국방/정식)</span>
@@ -201,14 +240,15 @@
           </div>
         </div>
       </div>
-    </div>
+    </main>
 
-    <div class="input-area">
+    <div class="input-area" role="region" aria-label="검색 입력">
       <form class="input-form" id="form">
-        <textarea id="input" placeholder="검색할 내용을 입력하세요 (예: 구경50미리)" rows="1" maxlength="500"></textarea>
-        <button class="send-btn" type="submit" id="sendBtn" disabled>▲</button>
+        <label for="input" class="sr-only">검색어 입력</label>
+        <textarea id="input" placeholder="검색할 내용을 입력하세요 (예: 구경50미리)" rows="1" maxlength="500" aria-label="검색어" aria-describedby="input-hint"></textarea>
+        <button class="send-btn" type="submit" id="sendBtn" disabled aria-label="전송">▲</button>
       </form>
-      <p class="hint">Enter로 전송 · Shift+Enter로 줄바꿈 · KDSIS 실시간 조회 (데이터 미저장)</p>
+      <p class="hint" id="input-hint">Enter로 전송 · Shift+Enter로 줄바꿈 · Ctrl+K 새 대화 · KDSIS 실시간 조회 (데이터 미저장)</p>
     </div>
   </div>
 
@@ -219,7 +259,31 @@ const input = document.getElementById("input");
 const sendBtn = document.getElementById("sendBtn");
 const statusEl = document.getElementById("status");
 const welcome = document.getElementById("welcome");
+const resetBtn = document.getElementById("resetBtn");
 let busy = false;
+
+// ── New chat / reset ──
+function resetChat() {
+  if (busy) return;
+  // Remove all rendered messages except the welcome panel
+  Array.from(messages.children).forEach((c) => {
+    if (c.id !== "welcome") c.remove();
+  });
+  welcome.style.display = "";
+  input.value = "";
+  input.style.height = "auto";
+  sendBtn.disabled = true;
+  input.focus();
+}
+resetBtn.addEventListener("click", resetChat);
+
+// Ctrl/Cmd+K → new chat
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    resetChat();
+  }
+});
 
 // ── Input handling ──
 input.addEventListener("input", () => {
@@ -252,15 +316,26 @@ document.getElementById("prompts").addEventListener("click", (e) => {
 });
 
 // 샘플 카드 자체도 클릭 가능하게. 단 "자세히 보기" 펼침은 제외.
-document.addEventListener("click", (e) => {
-  if (e.target.closest("summary, details")) return;
-  const sample = e.target.closest("[data-sample-params]");
+function triggerSample(sample) {
   if (!sample || busy) return;
   try {
     const params = JSON.parse(sample.dataset.sampleParams);
     const label = sample.dataset.sampleLabel || Object.values(params).join(" ");
     runDirectSearch(params, label);
   } catch {}
+}
+document.addEventListener("click", (e) => {
+  if (e.target.closest("summary, details")) return;
+  triggerSample(e.target.closest("[data-sample-params]"));
+});
+// 키보드: Enter/Space로 샘플 카드 실행 (role="button"이므로 접근성 기대치 충족)
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const sample = e.target.closest && e.target.closest("[data-sample-params]");
+  if (!sample) return;
+  if (e.target.closest("summary, details")) return;
+  e.preventDefault();
+  triggerSample(sample);
 });
 
 // ── Form submit ──
@@ -392,7 +467,7 @@ function addMessage(text, role) {
 function addBotMessage(html) {
   const div = document.createElement("div");
   div.className = "msg msg--bot";
-  div.innerHTML = `<div class="avatar">🤖</div><div class="bubble">${html}</div>`;
+  div.innerHTML = `<div class="avatar" aria-hidden="true">🤖</div><div class="bubble">${html}</div>`;
   messages.appendChild(div);
   scrollBottom();
 }
@@ -436,10 +511,10 @@ function addResultMessage(data) {
   }
 
   // 툴바 (카운트 + 뷰 토글)
-  html += '<div class="result-toolbar">';
+  html += '<div class="result-toolbar" role="toolbar" aria-label="결과 뷰 옵션">';
   html += `<span class="chip chip-count">🔍 총 <strong>${data.totalCount}</strong>건</span>`;
   html += `<span class="chip">${data.rows.length}건 표시</span>`;
-  html += `<button class="view-toggle" onclick="toggleView('${uid}')">📊 표로 보기</button>`;
+  html += `<button class="view-toggle" type="button" data-toggle-view="${uid}" aria-pressed="false">📊 표로 보기</button>`;
   html += "</div>";
 
   // 카드 뷰
@@ -518,22 +593,37 @@ function addResultMessage(data) {
   html += "</tbody></table></div>";
 
   // 스크린샷
-  html += `<span class="debug-toggle" onclick="toggleDebug(this)">📸 검색 화면 캡처 보기</span>`;
-  html += `<img class="debug-img" src="/api/screenshot?t=${Date.now()}" alt="KDSIS 검색 캡처">`;
+  html += `<button class="debug-toggle" type="button" data-debug-toggle aria-expanded="false">📸 검색 화면 캡처 보기</button>`;
+  html += `<img class="debug-img" src="/api/screenshot?t=${Date.now()}" alt="KDSIS 검색 화면 캡처" loading="lazy">`;
 
   addBotMessage(html);
 }
 
-function toggleView(uid) {
-  const cards = document.getElementById(uid + "-cards");
-  const table = document.getElementById(uid + "-table");
-  if (!cards || !table) return;
-  const showingCards = !cards.classList.contains("hidden");
-  cards.classList.toggle("hidden", showingCards);
-  table.classList.toggle("hidden", !showingCards);
-  const btn = cards.parentElement.querySelector(".view-toggle");
-  if (btn) btn.textContent = showingCards ? "🗂️ 카드로 보기" : "📊 표로 보기";
-}
+// 결과 내 버튼 위임 (뷰 토글, 캡처 토글)
+messages.addEventListener("click", (e) => {
+  const viewBtn = e.target.closest("[data-toggle-view]");
+  if (viewBtn) {
+    const uid = viewBtn.dataset.toggleView;
+    const cards = document.getElementById(uid + "-cards");
+    const table = document.getElementById(uid + "-table");
+    if (!cards || !table) return;
+    const showingCards = !cards.classList.contains("hidden");
+    cards.classList.toggle("hidden", showingCards);
+    table.classList.toggle("hidden", !showingCards);
+    viewBtn.textContent = showingCards ? "🗂️ 카드로 보기" : "📊 표로 보기";
+    viewBtn.setAttribute("aria-pressed", String(showingCards));
+    return;
+  }
+  const dbgBtn = e.target.closest("[data-debug-toggle]");
+  if (dbgBtn) {
+    const img = dbgBtn.nextElementSibling;
+    if (!img) return;
+    const shown = img.classList.toggle("show");
+    dbgBtn.setAttribute("aria-expanded", String(shown));
+    dbgBtn.textContent = shown ? "📸 캡처 숨기기" : "📸 검색 화면 캡처 보기";
+    return;
+  }
+});
 
 let typingCounter = 0;
 function addTyping() {
@@ -541,9 +631,10 @@ function addTyping() {
   const div = document.createElement("div");
   div.className = "msg msg--bot";
   div.id = id;
-  div.innerHTML = `<div class="avatar">🤖</div><div class="bubble">
-    <div class="search-status"><div class="spinner"></div>KDSIS에서 검색하고 있습니다…</div>
-    <div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+  div.setAttribute("aria-live", "polite");
+  div.innerHTML = `<div class="avatar" aria-hidden="true">🤖</div><div class="bubble">
+    <div class="search-status"><div class="spinner" aria-hidden="true"></div>KDSIS에서 검색하고 있습니다…</div>
+    <div class="dots" aria-hidden="true"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
   </div>`;
   messages.appendChild(div);
   return id;
@@ -555,11 +646,6 @@ function removeTyping(id) {
 }
 
 // ── Utils ──
-function toggleDebug(el) {
-  const img = el.nextElementSibling;
-  img.classList.toggle("show");
-}
-
 function setStatus(text, isBusy) {
   statusEl.textContent = text;
   statusEl.className = "status" + (isBusy ? " busy" : "");
