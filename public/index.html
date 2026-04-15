@@ -202,6 +202,12 @@
     /* sr-only for screen readers */
     .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
+    /* Inline message actions (retry, etc.) */
+    .msg-actions{display:flex;gap:.5rem;margin-top:.625rem;flex-wrap:wrap}
+    .msg-action{font-size:.8125rem;font-weight:500;padding:.4rem .875rem;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;font-family:var(--font);transition:all .15s;display:inline-flex;align-items:center;gap:.375rem}
+    .msg-action:hover{border-color:var(--primary-light);background:var(--surface-alt);color:var(--primary)}
+    .msg-action:disabled{opacity:.5;cursor:not-allowed}
+
     /* Skeleton loader — preview the result shape while loading */
     .skeleton-cards{display:grid;gap:.625rem;margin-top:.75rem}
     .skeleton-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:.875rem 1rem}
@@ -448,6 +454,25 @@ function clearSession() {
   saveSession();
 }
 
+// ── Retry tracking ──
+let lastSearch = null; // { kind: "query" | "direct", text?, params?, label? }
+function retryLast() {
+  if (busy || !lastSearch) return;
+  if (lastSearch.kind === "query") sendQuery(lastSearch.text);
+  else if (lastSearch.kind === "direct") runDirectSearch(lastSearch.params, lastSearch.label);
+}
+function retryButtonHTML() {
+  return `<div class="msg-actions"><button type="button" class="msg-action" data-retry>🔄 다시 시도</button></div>`;
+}
+function emptyStateHTML(label) {
+  return `<div class="empty-state">
+    <div class="empty-state-icon" aria-hidden="true">🔍</div>
+    <div><strong>검색 결과가 없습니다</strong></div>
+    ${label ? `<p style="margin-top:.5rem;font-size:.8125rem">"${esc(label)}"에 일치하는 항목을 찾지 못했습니다.</p>` : ""}
+    <p style="margin-top:.5rem;font-size:.8125rem;color:var(--muted)">규격번호의 일부만 입력하거나, 적용장비명/제정기관으로 다시 검색해 보세요.</p>
+  </div>`;
+}
+
 // ── New chat / reset ──
 function resetChat() {
   if (busy) return;
@@ -542,6 +567,7 @@ form.addEventListener("submit", (e) => {
 // ── Direct search (필드 명시 — AI 파싱 우회) ──
 async function runDirectSearch(params, displayText) {
   busy = true;
+  lastSearch = { kind: "direct", params, label: displayText };
   welcome.style.display = "none";
   addMessage(displayText, "user");
   input.value = "";
@@ -565,7 +591,8 @@ async function runDirectSearch(params, displayText) {
       removeTyping(typingId);
       const snippet = rawText.slice(0, 300).replace(/\s+/g, " ").trim();
       addBotMessage(
-        `❌ 서버 에러 (HTTP ${res.status}).<div class="error-msg" style="margin-top:.5rem;font-family:var(--mono);font-size:.75rem;white-space:pre-wrap">${esc(snippet)}…</div>`
+        `❌ 서버 에러 (HTTP ${res.status}).<div class="error-msg" style="margin-top:.5rem;font-family:var(--mono);font-size:.75rem;white-space:pre-wrap">${esc(snippet)}…</div>` +
+        retryButtonHTML()
       );
       setStatus("● 온라인", false);
       busy = false;
@@ -574,11 +601,11 @@ async function runDirectSearch(params, displayText) {
     }
     removeTyping(typingId);
     if (data.type === "success" && data.rows?.length > 0) addResultMessage(data);
-    else if (data.type === "error") addBotMessage(`❌ ${data.message}`);
-    else addBotMessage(`🔍 ${data.message || "검색 결과가 없습니다."}`);
+    else if (data.type === "error") addBotMessage(`❌ ${esc(data.message)}` + retryButtonHTML());
+    else addBotMessage(emptyStateHTML(displayText) + retryButtonHTML());
   } catch (err) {
     removeTyping(typingId);
-    addBotMessage(`❌ 네트워크 에러: ${esc(err.message)}`);
+    addBotMessage(`❌ 네트워크 에러: ${esc(err.message)}` + retryButtonHTML());
   }
   setStatus("● 온라인", false);
   busy = false;
@@ -588,6 +615,7 @@ async function runDirectSearch(params, displayText) {
 // ── Main flow ──
 async function sendQuery(text) {
   busy = true;
+  lastSearch = { kind: "query", text };
   welcome.style.display = "none";
   addMessage(text, "user");
   input.value = "";
@@ -620,7 +648,8 @@ async function sendQuery(text) {
         `<div class="error-msg" style="margin-top:.5rem;font-family:var(--mono);font-size:.75rem;white-space:pre-wrap">${esc(snippet)}${rawText.length > 300 ? "…" : ""}</div>` +
         `<p style="margin-top:.5rem;font-size:.8125rem;color:var(--muted)">` +
         `원인 추정: Render 타임아웃 / 콜드 스타트 / 메모리 부족. ` +
-        `터미널에서 <code>curl -v .../api/search/direct</code>로 재확인해 보세요.</p>`
+        `터미널에서 <code>curl -v .../api/search/direct</code>로 재확인해 보세요.</p>` +
+        retryButtonHTML()
       );
       setStatus("● 온라인", false);
       busy = false;
@@ -632,13 +661,13 @@ async function sendQuery(text) {
     if (data.type === "success" && data.rows && data.rows.length > 0) {
       addResultMessage(data);
     } else if (data.type === "error") {
-      addBotMessage(`❌ ${data.message}`);
+      addBotMessage(`❌ ${esc(data.message)}` + retryButtonHTML());
     } else {
-      addBotMessage(`🔍 ${data.message || "검색 결과가 없습니다."}`);
+      addBotMessage(emptyStateHTML(text) + retryButtonHTML());
     }
   } catch (err) {
     removeTyping(typingId);
-    addBotMessage(`❌ 네트워크 에러: ${esc(err.message)}`);
+    addBotMessage(`❌ 네트워크 에러: ${esc(err.message)}` + retryButtonHTML());
   }
 
   setStatus("● 온라인", false);
@@ -811,8 +840,19 @@ function serializableResult(data) {
   };
 }
 
-// 결과 내 버튼 위임 (뷰 토글, 캡처 토글, 규격번호 복사)
+// 결과 내 버튼 위임 (뷰 토글, 캡처 토글, 규격번호 복사, 재시도)
 async function handleClickDelegated(e) {
+  // Retry last search
+  const retryBtn = e.target.closest("[data-retry]");
+  if (retryBtn) {
+    e.preventDefault();
+    if (busy || !lastSearch) {
+      toast("재시도할 검색이 없습니다", "info");
+      return;
+    }
+    retryLast();
+    return;
+  }
   // Spec number copy — works for both result cards and the welcome sample card
   const copyBtn = e.target.closest("[data-copy]");
   if (copyBtn) {
