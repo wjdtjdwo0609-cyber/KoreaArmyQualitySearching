@@ -345,6 +345,41 @@ try {
   });
 } catch {}
 
+// ── Session persistence ──
+const SESSION_KEY = "kdsis-session-v1";
+const SESSION_MAX_EVENTS = 50;
+let suppressPersist = false;          // true while replaying restored events
+const sessionEvents = loadSession();  // in-memory mirror
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function saveSession() {
+  try {
+    if (sessionEvents.length === 0) localStorage.removeItem(SESSION_KEY);
+    else localStorage.setItem(SESSION_KEY, JSON.stringify(sessionEvents));
+  } catch {}
+}
+function pushEvent(ev) {
+  if (suppressPersist) return;
+  sessionEvents.push(ev);
+  if (sessionEvents.length > SESSION_MAX_EVENTS) {
+    sessionEvents.splice(0, sessionEvents.length - SESSION_MAX_EVENTS);
+  }
+  saveSession();
+}
+function clearSession() {
+  sessionEvents.length = 0;
+  saveSession();
+}
+
 // ── New chat / reset ──
 function resetChat() {
   if (busy) return;
@@ -356,6 +391,7 @@ function resetChat() {
   input.value = "";
   input.style.height = "auto";
   sendBtn.disabled = true;
+  clearSession();
   input.focus();
 }
 resetBtn.addEventListener("click", resetChat);
@@ -550,14 +586,18 @@ function addMessage(text, role) {
     div.innerHTML = `<div class="bubble"><p>${esc(text)}</p></div>`;
   }
   messages.appendChild(div);
+  if (role === "user") pushEvent({ type: "user", text });
   scrollBottom();
 }
 
-function addBotMessage(html) {
+function addBotMessage(html, opts) {
   const div = document.createElement("div");
   div.className = "msg msg--bot";
   div.innerHTML = `<div class="avatar" aria-hidden="true">🤖</div><div class="bubble">${html}</div>`;
   messages.appendChild(div);
+  // Persist plain bot messages (errors, empty results). Result messages are
+  // persisted separately via addResultMessage to retain structured data.
+  if (!opts || !opts.skipPersist) pushEvent({ type: "bot", html });
   scrollBottom();
 }
 
@@ -681,11 +721,26 @@ function addResultMessage(data) {
   });
   html += "</tbody></table></div>";
 
-  // 스크린샷
-  html += `<button class="debug-toggle" type="button" data-debug-toggle aria-expanded="false">📸 검색 화면 캡처 보기</button>`;
-  html += `<img class="debug-img" src="/api/screenshot?t=${Date.now()}" alt="KDSIS 검색 화면 캡처" loading="lazy">`;
+  // 스크린샷 (신규 결과 한정 — 복원 시에는 stale URL이라 생략)
+  if (!data.__restored) {
+    html += `<button class="debug-toggle" type="button" data-debug-toggle aria-expanded="false">📸 검색 화면 캡처 보기</button>`;
+    html += `<img class="debug-img" src="/api/screenshot?t=${Date.now()}" alt="KDSIS 검색 화면 캡처" loading="lazy">`;
+  }
 
-  addBotMessage(html);
+  addBotMessage(html, { skipPersist: true });
+  // Persist structured payload so we can re-render after reload without re-fetching
+  pushEvent({ type: "result", data: serializableResult(data) });
+}
+
+// Strip non-essential fields before storing
+function serializableResult(data) {
+  return {
+    type: data.type,
+    totalCount: data.totalCount,
+    rows: data.rows,
+    columns: data.columns,
+    searchParams: data.searchParams,
+  };
 }
 
 // 결과 내 버튼 위임 (뷰 토글, 캡처 토글)
@@ -752,6 +807,31 @@ function esc(str) {
   d.appendChild(document.createTextNode(String(str)));
   return d.innerHTML;
 }
+
+// ── Session restore (replay events without persisting) ──
+function restoreSession() {
+  if (sessionEvents.length === 0) return;
+  // Take a snapshot before mutation, then replay
+  const snapshot = sessionEvents.slice();
+  sessionEvents.length = 0; // event handlers will repush
+  welcome.style.display = "none";
+  suppressPersist = false;  // we WANT to repush so storage stays canonical
+  // Temporarily disable smooth scroll for instant restore
+  const prev = messages.style.scrollBehavior;
+  messages.style.scrollBehavior = "auto";
+  for (const ev of snapshot) {
+    try {
+      if (ev.type === "user") addMessage(ev.text, "user");
+      else if (ev.type === "bot") addBotMessage(ev.html);
+      else if (ev.type === "result" && ev.data) addResultMessage({ ...ev.data, __restored: true });
+    } catch (e) {
+      console.warn("session replay skipped:", e);
+    }
+  }
+  messages.style.scrollBehavior = prev || "smooth";
+  scrollBottom();
+}
+restoreSession();
 </script>
 </body>
 </html>
