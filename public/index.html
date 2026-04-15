@@ -472,10 +472,9 @@ function rowsToCsv(columns, rows) {
   }
   return lines.join("\r\n");
 }
-function downloadCsv(data, filename) {
-  const csv = rowsToCsv(data.columns, data.rows);
-  // UTF-8 BOM so Excel on Windows opens Korean correctly
-  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+// Tiny shared download helper — builds a Blob, clicks a temp anchor,
+// then revokes the object URL on the next tick.
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -483,8 +482,24 @@ function downloadCsv(data, filename) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  // Revoke after a tick to give the browser time to start the download
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function downloadCsv(data, filename) {
+  const csv = rowsToCsv(data.columns, data.rows);
+  // UTF-8 BOM so Excel on Windows opens Korean correctly
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+  downloadBlob(blob, filename);
+}
+function downloadJson(data, filename) {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    totalCount: data.totalCount,
+    columns: data.columns,
+    searchParams: data.searchParams || null,
+    rows: data.rows,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+  downloadBlob(blob, filename);
 }
 
 // ── Clipboard ──
@@ -1201,6 +1216,7 @@ function addResultMessage(data) {
   html += `</label>`;
   html += `<button class="view-toggle" type="button" data-toggle-view="${uid}" aria-pressed="false">📊 표로 보기</button>`;
   html += `<button class="view-toggle" type="button" data-download-csv="${uid}" title="CSV로 다운로드">⬇ CSV</button>`;
+  html += `<button class="view-toggle" type="button" data-download-json="${uid}" title="JSON으로 다운로드">⬇ JSON</button>`;
   html += "</div>";
 
   // Initial slice for first page
@@ -1343,25 +1359,35 @@ async function handleClickDelegated(e) {
     viewBtn.setAttribute("aria-pressed", String(showingCards));
     return;
   }
-  const csvBtn = e.target.closest("[data-download-csv]");
-  if (csvBtn) {
-    const uid = csvBtn.dataset.downloadCsv;
+  const dlBtn = e.target.closest("[data-download-csv], [data-download-json]");
+  if (dlBtn) {
+    const isJson = dlBtn.hasAttribute("data-download-json");
+    const uid = isJson ? dlBtn.dataset.downloadJson : dlBtn.dataset.downloadCsv;
     const entry = resultDataByUid.get(uid);
     if (!entry) {
       toast("다운로드할 결과가 없습니다", "error");
       return;
     }
     try {
-      // Export in the currently-sorted order
+      // Export in the currently-sorted order (full set, ignore pagination)
       const rows = entry.sort && entry.sort.col
         ? sortRows(entry.data.rows, entry.sort.col, entry.sort.dir)
         : entry.data.rows;
-      const exportData = { columns: entry.data.columns, rows };
       const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15);
-      downloadCsv(exportData, `kdsis_${ts}.csv`);
-      toast(`CSV 저장: ${rows.length}건`, "success");
+      if (isJson) {
+        downloadJson({
+          columns: entry.data.columns,
+          rows,
+          searchParams: entry.data.searchParams,
+          totalCount: entry.data.totalCount,
+        }, `kdsis_${ts}.json`);
+        toast(`JSON 저장: ${rows.length}건`, "success");
+      } else {
+        downloadCsv({ columns: entry.data.columns, rows }, `kdsis_${ts}.csv`);
+        toast(`CSV 저장: ${rows.length}건`, "success");
+      }
     } catch (err) {
-      toast("CSV 생성 실패: " + err.message, "error");
+      toast((isJson ? "JSON" : "CSV") + " 생성 실패: " + err.message, "error");
     }
     return;
   }
