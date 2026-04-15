@@ -415,6 +415,35 @@ function toast(message, variant = "info", duration = 2200) {
   }, duration);
 }
 
+// ── CSV export ──
+// RFC 4180: wrap a cell in double quotes when it contains a comma,
+// quote, CR or LF. Any inner quotes are doubled.
+function csvCell(v) {
+  const s = v == null ? "" : String(v);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function rowsToCsv(columns, rows) {
+  const lines = [columns.map(csvCell).join(",")];
+  for (const row of rows) {
+    lines.push(columns.map((c, i) => csvCell(row[c] ?? row[`col_${i}`] ?? "")).join(","));
+  }
+  return lines.join("\r\n");
+}
+function downloadCsv(data, filename) {
+  const csv = rowsToCsv(data.columns, data.rows);
+  // UTF-8 BOM so Excel on Windows opens Korean correctly
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Revoke after a tick to give the browser time to start the download
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // ── Clipboard ──
 async function copyText(text) {
   try {
@@ -827,8 +856,12 @@ const PRIMARY_FIELDS = new Set([
   "제정일자","최종개정일자","품명","형상관리책임기관(1)","형상관리책임기관(2)","형상관리책임기관(3)",
 ]);
 
+// Map from uid → raw result data, for CSV export after render
+const resultDataByUid = new Map();
+
 function addResultMessage(data) {
   const uid = "r" + Date.now() + Math.floor(Math.random() * 1000);
+  resultDataByUid.set(uid, data);
   const terms = deriveHighlightTerms(data);
   const hi = (v) => highlight(v, terms);
   let html = "";
@@ -842,11 +875,12 @@ function addResultMessage(data) {
     html += "</div>";
   }
 
-  // 툴바 (카운트 + 뷰 토글)
+  // 툴바 (카운트 + 뷰 토글 + CSV)
   html += '<div class="result-toolbar" role="toolbar" aria-label="결과 뷰 옵션">';
   html += `<span class="chip chip-count">🔍 총 <strong>${data.totalCount}</strong>건</span>`;
   html += `<span class="chip">${data.rows.length}건 표시</span>`;
   html += `<button class="view-toggle" type="button" data-toggle-view="${uid}" aria-pressed="false">📊 표로 보기</button>`;
+  html += `<button class="view-toggle" type="button" data-download-csv="${uid}" title="CSV로 다운로드">⬇ CSV</button>`;
   html += "</div>";
 
   // 카드 뷰
@@ -986,6 +1020,23 @@ async function handleClickDelegated(e) {
     table.classList.toggle("hidden", !showingCards);
     viewBtn.textContent = showingCards ? "🗂️ 카드로 보기" : "📊 표로 보기";
     viewBtn.setAttribute("aria-pressed", String(showingCards));
+    return;
+  }
+  const csvBtn = e.target.closest("[data-download-csv]");
+  if (csvBtn) {
+    const uid = csvBtn.dataset.downloadCsv;
+    const data = resultDataByUid.get(uid);
+    if (!data) {
+      toast("다운로드할 결과가 없습니다", "error");
+      return;
+    }
+    try {
+      const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15);
+      downloadCsv(data, `kdsis_${ts}.csv`);
+      toast(`CSV 저장: ${data.rows.length}건`, "success");
+    } catch (err) {
+      toast("CSV 생성 실패: " + err.message, "error");
+    }
     return;
   }
   const dbgBtn = e.target.closest("[data-debug-toggle]");
