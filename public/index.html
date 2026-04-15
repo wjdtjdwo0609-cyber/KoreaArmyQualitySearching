@@ -184,6 +184,21 @@
 
     /* Input */
     .input-area{padding:.75rem 1.5rem 1.25rem;background:var(--bg);max-width:calc(800px + 4rem);width:100%;margin:0 auto}
+    .input-wrap{position:relative}
+    .recent-panel{position:absolute;left:0;right:0;bottom:calc(100% + .5rem);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);box-shadow:var(--sh-md);padding:.375rem;max-height:280px;overflow-y:auto;z-index:50;animation:fadeUp .15s ease-out}
+    .recent-panel[hidden]{display:none}
+    .recent-head{display:flex;align-items:center;padding:.25rem .625rem .375rem;font-size:.6875rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;gap:.5rem}
+    .recent-head strong{flex:1;font-size:.75rem;letter-spacing:0;text-transform:none;color:var(--muted);font-weight:600}
+    .recent-clear{font-size:.75rem;color:var(--muted);background:none;border:none;cursor:pointer;padding:.125rem .375rem;border-radius:var(--r-sm);font-family:var(--font)}
+    .recent-clear:hover{color:var(--error);background:var(--error-tint)}
+    .recent-item{display:flex;align-items:center;gap:.5rem;padding:.5rem .625rem;border-radius:var(--r-sm);cursor:pointer;font-size:.875rem;color:var(--text);transition:background .1s}
+    .recent-item:hover,.recent-item.active{background:var(--surface-alt)}
+    .recent-item .ri-icon{font-size:.875rem;opacity:.6;flex-shrink:0}
+    .recent-item .ri-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .recent-item .ri-remove{opacity:0;flex-shrink:0;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border:none;background:none;color:var(--muted);cursor:pointer;border-radius:var(--r-sm);font-size:.875rem;transition:opacity .1s,color .1s,background .1s}
+    .recent-item:hover .ri-remove,.recent-item.active .ri-remove{opacity:1}
+    .recent-item .ri-remove:hover{color:var(--error);background:var(--error-tint)}
+    .recent-empty{padding:.875rem;text-align:center;font-size:.8125rem;color:var(--muted)}
     .input-form{display:flex;align-items:flex-end;gap:.5rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:.625rem .625rem .625rem 1rem;box-shadow:var(--sh-md);transition:border-color .15s,box-shadow .15s}
     .input-form:focus-within{border-color:var(--primary-light);box-shadow:var(--sh-md),0 0 0 3px var(--primary-tint-strong)}
     .input-form textarea{flex:1;border:none;outline:none;resize:none;font-family:var(--font);font-size:.9375rem;color:var(--text);background:transparent;line-height:1.5;max-height:120px;padding:.375rem 0;min-height:1.5rem}
@@ -355,12 +370,15 @@
     </main>
 
     <div class="input-area" role="region" aria-label="검색 입력">
-      <form class="input-form" id="form">
-        <label for="input" class="sr-only">검색어 입력</label>
-        <textarea id="input" placeholder="검색할 내용을 입력하세요 (예: 구경50미리)" rows="1" maxlength="500" aria-label="검색어" aria-describedby="input-hint"></textarea>
-        <button class="send-btn" type="submit" id="sendBtn" disabled aria-label="전송">▲</button>
-      </form>
-      <p class="hint" id="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+K 새 대화 · Shift+D 테마 · KDSIS 실시간 조회 (데이터 미저장)</p>
+      <div class="input-wrap">
+        <div class="recent-panel" id="recentPanel" role="listbox" aria-label="최근 검색" hidden></div>
+        <form class="input-form" id="form">
+          <label for="input" class="sr-only">검색어 입력</label>
+          <textarea id="input" placeholder="검색할 내용을 입력하세요 (예: 구경50미리)" rows="1" maxlength="500" aria-label="검색어" aria-describedby="input-hint" aria-autocomplete="list" aria-controls="recentPanel"></textarea>
+          <button class="send-btn" type="submit" id="sendBtn" disabled aria-label="전송">▲</button>
+        </form>
+      </div>
+      <p class="hint" id="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+K 새 대화 · Shift+D 테마 · ↑↓ 최근 검색 · KDSIS 실시간 조회</p>
     </div>
   </div>
 
@@ -529,6 +547,97 @@ function clearSession() {
   saveSession();
 }
 
+// ── Recent search history ──
+const RECENT_KEY = "kdsis-recent-v1";
+const RECENT_MAX = 10;
+const recentPanel = document.getElementById("recentPanel");
+let recentList = loadRecent();
+let recentActiveIdx = -1; // keyboard selection
+
+function loadRecent() {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function saveRecent() {
+  try {
+    if (recentList.length === 0) localStorage.removeItem(RECENT_KEY);
+    else localStorage.setItem(RECENT_KEY, JSON.stringify(recentList));
+  } catch {}
+}
+function rememberRecent(text) {
+  const v = String(text || "").trim();
+  if (!v) return;
+  // Move to front, de-dupe, cap
+  recentList = [v, ...recentList.filter((x) => x !== v)].slice(0, RECENT_MAX);
+  saveRecent();
+}
+function removeRecent(text) {
+  recentList = recentList.filter((x) => x !== text);
+  saveRecent();
+  renderRecent();
+}
+function clearRecent() {
+  recentList = [];
+  saveRecent();
+  hideRecent();
+  toast("최근 검색을 모두 지웠습니다", "info");
+}
+function renderRecent() {
+  if (recentList.length === 0) {
+    recentPanel.innerHTML = `<div class="recent-empty">최근 검색 기록이 없습니다</div>`;
+    return;
+  }
+  let html = `<div class="recent-head"><strong>최근 검색</strong><button class="recent-clear" type="button" data-recent-clear>모두 지우기</button></div>`;
+  recentList.forEach((text, i) => {
+    html += `<div class="recent-item${i === recentActiveIdx ? " active" : ""}" role="option" aria-selected="${i === recentActiveIdx}" data-recent-idx="${i}">
+      <span class="ri-icon" aria-hidden="true">🕐</span>
+      <span class="ri-text">${esc(text)}</span>
+      <button type="button" class="ri-remove" aria-label="제거" data-recent-remove="${esc(text)}">✕</button>
+    </div>`;
+  });
+  recentPanel.innerHTML = html;
+}
+function showRecent() {
+  if (recentList.length === 0) return;
+  recentActiveIdx = -1;
+  renderRecent();
+  recentPanel.hidden = false;
+}
+function hideRecent() {
+  recentPanel.hidden = true;
+  recentActiveIdx = -1;
+}
+function moveRecentSelection(delta) {
+  if (recentPanel.hidden) {
+    if (recentList.length === 0) return;
+    showRecent();
+  }
+  const n = recentList.length;
+  if (n === 0) return;
+  // Virtual scale 0..n where slot n represents "no selection" (-1).
+  // Arrow keys cycle through [item 0..n-1, none, item 0..].
+  const cur = recentActiveIdx < 0 ? n : recentActiveIdx;
+  let next = (cur + delta) % (n + 1);
+  if (next < 0) next += (n + 1);
+  recentActiveIdx = next === n ? -1 : next;
+  renderRecent();
+  const active = recentPanel.querySelector(".recent-item.active");
+  if (active) active.scrollIntoView({ block: "nearest" });
+}
+function applyRecent(text) {
+  hideRecent();
+  if (!text) return;
+  if (busy) return;
+  input.value = text;
+  sendBtn.disabled = false;
+  sendQuery(text);
+}
+
 // ── Retry tracking ──
 let lastSearch = null; // { kind: "query" | "direct", text?, params?, label? }
 function retryLast() {
@@ -641,12 +750,63 @@ input.addEventListener("input", () => {
   input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight, 120) + "px";
   sendBtn.disabled = input.value.trim().length === 0;
+  // Hide the recent panel as soon as the user starts typing
+  if (input.value.length > 0) hideRecent();
+});
+
+input.addEventListener("focus", () => {
+  if (input.value.trim().length === 0) showRecent();
+});
+input.addEventListener("blur", () => {
+  // Delay so clicks inside the panel still fire
+  setTimeout(() => hideRecent(), 150);
 });
 
 input.addEventListener("keydown", (e) => {
+  // Recent-panel navigation comes first when panel is open
+  if (!recentPanel.hidden) {
+    if (e.key === "ArrowDown") { e.preventDefault(); moveRecentSelection(1); return; }
+    if (e.key === "ArrowUp")   { e.preventDefault(); moveRecentSelection(-1); return; }
+    if (e.key === "Escape")    { e.preventDefault(); hideRecent(); return; }
+    if (e.key === "Enter" && recentActiveIdx >= 0) {
+      e.preventDefault();
+      applyRecent(recentList[recentActiveIdx]);
+      return;
+    }
+  } else if (e.key === "ArrowDown" && input.value.trim().length === 0) {
+    e.preventDefault();
+    showRecent();
+    moveRecentSelection(1);
+    return;
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     form.dispatchEvent(new Event("submit"));
+  }
+});
+
+// Click handling inside the recent panel (delegated so re-renders stay cheap)
+recentPanel.addEventListener("mousedown", (e) => {
+  // Prevent the input from blurring before we read the click target
+  e.preventDefault();
+});
+recentPanel.addEventListener("click", (e) => {
+  if (e.target.closest("[data-recent-clear]")) {
+    clearRecent();
+    input.focus();
+    return;
+  }
+  const removeBtn = e.target.closest("[data-recent-remove]");
+  if (removeBtn) {
+    e.stopPropagation();
+    removeRecent(removeBtn.dataset.recentRemove);
+    input.focus();
+    return;
+  }
+  const item = e.target.closest("[data-recent-idx]");
+  if (item) {
+    const idx = Number(item.dataset.recentIdx);
+    applyRecent(recentList[idx]);
   }
 });
 
@@ -701,6 +861,8 @@ form.addEventListener("submit", (e) => {
 async function runDirectSearch(params, displayText) {
   busy = true;
   lastSearch = { kind: "direct", params, label: displayText };
+  rememberRecent(displayText);
+  hideRecent();
   welcome.style.display = "none";
   addMessage(displayText, "user");
   input.value = "";
@@ -749,6 +911,8 @@ async function runDirectSearch(params, displayText) {
 async function sendQuery(text) {
   busy = true;
   lastSearch = { kind: "query", text };
+  rememberRecent(text);
+  hideRecent();
   welcome.style.display = "none";
   addMessage(text, "user");
   input.value = "";
