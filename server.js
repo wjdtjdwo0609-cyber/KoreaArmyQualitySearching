@@ -28,6 +28,92 @@ const PORT = process.env.PORT || 3000;
 const KDSIS_URL =
   "https://kdsis.dapa.go.kr/cs/ctlgSpprtMgt/cagecd9250Mgt/gukminPopup.do?tabIdx=0&popYn=Y";
 
+// ═══════════════════════════════════════════════════════════
+// Browser pool + request queue + TTL cache
+// ═══════════════════════════════════════════════════════════
+// 구버전은 매 요청마다 chromium.launch() → close()로 3~5초 콜드 스타트를 냈다.
+// 지금은 프로세스 당 싱글턴 브라우저를 유지하고, 요청마다 새 context/page를
+// 띄운다. 동시 요청은 serial 큐로 직렬화 (같은 브라우저 위에서 grid 렌더가
+// 겹쳐 망가지는 걸 봤음). 동일 params는 TTL 캐시가 즉답.
+
+let _browser = null;
+let _browserLaunching = null;
+
+async function getBrowser() {
+  if (_browser && _browser.isConnected()) return _browser;
+  if (_browserLaunching) return _browserLaunching;
+  _browserLaunching = (async () => {
+    console.log("[browser] chromium launching...");
+    const b = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    b.on("disconnected", () => {
+      if (_browser === b) _browser = null;
+      console.warn("[browser] disconnected — will relaunch on next request");
+    });
+    _browser = b;
+    console.log("[browser] ready");
+    return b;
+  })();
+  try {
+    return await _browserLaunching;
+  } finally {
+    _browserLaunching = null;
+  }
+}
+
+async function closeBrowser() {
+  const b = _browser;
+  _browser = null;
+  if (b) {
+    try { await b.close(); } catch {}
+  }
+}
+
+// Serial queue — concurrency 1. A shared Chromium can technically run two
+// contexts in parallel, but KDSIS' WebSquare grid occasionally races when
+// two searches land in the same tick, and memory blows up fast. Queueing
+// is fine because repeat callers hit the cache anyway.
+let _chain = Promise.resolve();
+function runSerial(fn) {
+  const next = _chain.then(fn, fn);
+  _chain = next.catch(() => {}); // absorb rejection so the chain keeps moving
+  return next;
+}
+
+// TTL cache with in-flight dedup. Non-error results (even empty) get cached
+// by canonical params key.
+const CACHE_TTL_MS = Number(process.env.KDSIS_CACHE_TTL_MS || 60_000);
+const CACHE_MAX = 64;
+const _cache = new Map();      // key → { data, expiresAt }
+const _inFlight = new Map();   // key → Promise<results>
+
+function cacheKey(params) {
+  const keys = Object.keys(params || {}).sort();
+  return keys.map((k) => `${k}=${params[k]}`).join("&");
+}
+function cacheGet(key) {
+  const e = _cache.get(key);
+  if (!e) return null;
+  if (e.expiresAt < Date.now()) {
+    _cache.delete(key);
+    return null;
+  }
+  // LRU touch
+  _cache.delete(key);
+  _cache.set(key, e);
+  return e.data;
+}
+function cacheSet(key, data) {
+  if (_cache.has(key)) _cache.delete(key);
+  _cache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+  while (_cache.size > CACHE_MAX) {
+    const first = _cache.keys().next().value;
+    _cache.delete(first);
+  }
+}
+
 // ── AI 설정 ──────────────────────────────────────────────
 const AI_PROVIDER = (process.env.AI_PROVIDER || "claude").toLowerCase();
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -217,15 +303,90 @@ async function parseQuery(text) {
 }
 
 // ── Playwright로 KDSIS 검색 실행 ─────────────────────────
+// Public entry point: dedup + cache + serial queue around the raw Playwright
+// call. Cache and in-flight dedup live OUTSIDE the serial queue so that two
+// identical concurrent requests don't both run Playwright.
 async function searchKDSIS(params) {
-  let browser;
-  try {
-    browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
+  const key = cacheKey(params);
+  const cached = cacheGet(key);
+  if (cached) {
+    console.log(`[cache] hit: ${key || "(empty key)"}`);
+    return { ...cached, __cached: true };
+  }
+  if (_inFlight.has(key)) {
+    console.log(`[cache] in-flight join: ${key || "(empty key)"}`);
+    return _inFlight.get(key);
+  }
+  const p = runSerial(() => _runSearch(params))
+    .then((results) => {
+      // Cache non-error results (including zero-row) so repeat empty searches
+      // also go instant. Errors stay uncached so retries actually retry.
+      if (results && !results.error) cacheSet(key, results);
+      return results;
+    })
+    .finally(() => _inFlight.delete(key));
+  _inFlight.set(key, p);
+  return p;
+}
 
-    const context = await browser.newContext({
+// Wall-clock timeout + single retry on transient errors. Cold starts and
+// the WebSquare grid can flake; one retry hides ~90% of those without
+// doubling worst-case latency for the happy path.
+const SEARCH_TIMEOUT_MS = Number(process.env.KDSIS_SEARCH_TIMEOUT_MS || 45_000);
+const SEARCH_RETRIES = 1;
+
+function withTimeout(promise, ms, label) {
+  let t;
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => {
+      t = setTimeout(() => rej(new Error(`${label} timeout after ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(t));
+}
+function isTransient(msg) {
+  return /timeout|navigation|disconnect|net::|Target closed|frame.*detached|has been closed/i.test(
+    String(msg || "")
+  );
+}
+
+async function _runSearch(params) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= SEARCH_RETRIES; attempt++) {
+    try {
+      const result = await withTimeout(
+        _runSearchOnce(params),
+        SEARCH_TIMEOUT_MS,
+        "[KDSIS] search"
+      );
+      // _runSearchOnce returns { error: msg } for soft failures. Retry only
+      // if the error looks transient.
+      if (result && result.error && isTransient(result.error) && attempt < SEARCH_RETRIES) {
+        lastError = result.error;
+        console.warn(`[KDSIS] 시도 ${attempt + 1} 실패 (transient), 재시도: ${lastError}`);
+        continue;
+      }
+      if (attempt > 0 && result && !result.error) {
+        console.log(`[KDSIS] 재시도 성공 (시도 ${attempt + 1})`);
+      }
+      return result;
+    } catch (err) {
+      lastError = err.message || String(err);
+      if (attempt < SEARCH_RETRIES && isTransient(lastError)) {
+        console.warn(`[KDSIS] 시도 ${attempt + 1} 예외, 재시도: ${lastError}`);
+        continue;
+      }
+      return { rows: [], columns: [], totalCount: 0, error: lastError };
+    }
+  }
+  return { rows: [], columns: [], totalCount: 0, error: lastError };
+}
+
+async function _runSearchOnce(params) {
+  let context;
+  try {
+    const browser = await getBrowser();
+    context = await browser.newContext({
       locale: "ko-KR",
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -447,9 +608,16 @@ async function searchKDSIS(params) {
     return results;
   } catch (error) {
     console.error("[KDSIS] 검색 에러:", error.message);
+    // If the shared browser dropped, invalidate the singleton so the next
+    // call relaunches a fresh instance.
+    if (/disconnect|Target closed|Browser has been closed|has been closed/i.test(error.message || "")) {
+      await closeBrowser();
+    }
     return { rows: [], columns: [], totalCount: 0, error: error.message };
   } finally {
-    if (browser) await browser.close();
+    if (context) {
+      try { await context.close(); } catch {}
+    }
   }
 }
 
@@ -460,7 +628,7 @@ async function searchKDSIS(params) {
 //   3) 검색 후 페이지에 결과가 있는가 (DOM 스캔)
 //   4) 카운트/tbody 셀렉터가 실제 DOM과 일치하는가
 async function diagnosticSearch(params) {
-  let browser;
+  let context;
   const consoleErrors = [];
   const diag = {
     params,
@@ -483,11 +651,8 @@ async function diagnosticSearch(params) {
   };
 
   try {
-    browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-    const context = await browser.newContext({
+    const browser = await getBrowser();
+    context = await browser.newContext({
       locale: "ko-KR",
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -710,8 +875,13 @@ async function diagnosticSearch(params) {
     diag.currentUrl = page.url();
   } catch (err) {
     diag.error = err.message;
+    if (/disconnect|Target closed|Browser has been closed|has been closed/i.test(err.message || "")) {
+      await closeBrowser();
+    }
   } finally {
-    if (browser) await browser.close();
+    if (context) {
+      try { await context.close(); } catch {}
+    }
   }
 
   return diag;
@@ -820,7 +990,7 @@ app.post("/api/debug/detail", async (req, res) => {
       ? req.body.params
       : { 규격상태: "활성" };
 
-  let browser;
+  let context;
   const diag = {
     params,
     searchOk: false,
@@ -836,11 +1006,8 @@ app.post("/api/debug/detail", async (req, res) => {
   };
 
   try {
-    browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-    const context = await browser.newContext({
+    const browser = await getBrowser();
+    context = await browser.newContext({
       locale: "ko-KR",
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -994,8 +1161,13 @@ app.post("/api/debug/detail", async (req, res) => {
     }).catch(() => {});
   } catch (err) {
     diag.error = err.message;
+    if (/disconnect|Target closed|Browser has been closed|has been closed/i.test(err.message || "")) {
+      await closeBrowser();
+    }
   } finally {
-    if (browser) await browser.close();
+    if (context) {
+      try { await context.close(); } catch {}
+    }
   }
 
   res.json(diag);
@@ -1008,6 +1180,34 @@ app.get("/api/screenshot", (req, res) => {
     if (err) res.status(404).json({ error: "스크린샷이 없습니다." });
   });
 });
+
+// GET /api/health — browser/cache/in-flight 상태 가볍게 노출
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    browserAlive: !!(_browser && _browser.isConnected()),
+    cacheSize: _cache.size,
+    cacheTtlMs: CACHE_TTL_MS,
+    inFlight: _inFlight.size,
+    aiProvider: AI_PROVIDER,
+    uptimeSec: Math.round(process.uptime()),
+  });
+});
+
+// ── Graceful shutdown ───────────────────────────────────
+// SIGTERM (e.g. docker stop, render deploy) / SIGINT (Ctrl+C) — close the
+// shared chromium so it doesn't get orphaned as a zombie process.
+let _shuttingDown = false;
+async function shutdown(signal) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`\n[서버] ${signal} 수신 — 정리 중...`);
+  await closeBrowser();
+  console.log("[서버] 종료");
+  process.exit(0);
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 // ── 서버 시작 ────────────────────────────────────────────
 app.listen(PORT, () => {
@@ -1025,6 +1225,7 @@ app.listen(PORT, () => {
   ║                                               ║
   ║  POST /api/search      — 자연어 검색          ║
   ║  POST /api/search/direct — 필드 직접 지정     ║
+  ║  GET  /api/health      — 상태 확인             ║
   ║  GET  /api/debug       — 진단 모드 (덤프)     ║
   ║  GET  /api/screenshot  — 마지막 검색 캡처     ║
   ╚═══════════════════════════════════════════════╝

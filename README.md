@@ -1,91 +1,123 @@
 # 🎖️ 국방 AI 어시스턴트 — KDSIS 실시간 검색 에이전트
 
 KDSIS(국방표준종합정보시스템) 국민서비스를 AI 에이전트가 자동으로 검색하는 시스템입니다.
-담당자가 자연어로 질문하면, Playwright가 KDSIS 검색 폼을 자동으로 채우고 결과를 가져옵니다.
+담당자가 자연어로 질문하면 Claude/Gemini가 검색 폼 파라미터를 추출하고, Playwright가 KDSIS를 자동 조회해 결과를 반환합니다.
+
+**원칙: 데이터를 저장하지 않습니다.** 매 요청마다 KDSIS를 실시간으로 조회합니다 (검색 결과 캐싱은 60초 TTL의 메모리 캐시만).
 
 ## 아키텍처
 
 ```
-사용자 입력 (자연어)
+사용자 자연어
     ↓
-parseQuery() — 키워드 분석 → 검색 필드 매핑
+parseQuery — Claude/Gemini API (없으면 규칙 기반 폴백)
     ↓
-Playwright — KDSIS 페이지 자동 조작
+TTL 캐시 (60초) — 동일 params 즉답
     ↓
-결과 파싱 → JSON → 채팅 UI에 테이블 표시
+Serial 큐 → Playwright (싱글턴 Chromium)
+    ↓
+KDSIS 폼 입력 → 검색 → WebSquare 그리드 파싱
+    ↓
+JSON 응답
+    ↓
+챗봇 UI (카드/표 뷰, 정렬, 페이지네이션, CSV/JSON 다운로드, ...)
 ```
-
-**핵심: 데이터를 저장하지 않음.** 매번 KDSIS를 실시간 조회합니다.
 
 ## 설치 및 실행
 
 ```bash
-# 1. 의존성 설치
 npm install
-
-# 2. Playwright 브라우저 설치 (Chromium)
-npm run setup
-
-# 3. 서버 시작
-npm start
+npm run setup        # Playwright Chromium 설치
+npm start            # dotenv로 .env 로드 후 기동
+# 또는 npm run start:no-ai  (AI 키 없이 규칙 기반만)
 ```
 
-브라우저에서 http://localhost:3000 접속
+http://localhost:3000 접속.
 
-## 지원하는 자연어 검색 예시
+### 환경 변수 (.env)
 
-| 입력 | 자동 매핑 |
-|------|-----------|
-| "K2 소총 규격서 찾아줘" | 적용장비명: "K2 소총" |
-| "KDS 1005 검색" | 규격번호: "KDS 1005" |
-| "국방기술품질원 제정 활성 규격" | 제정기관: "국방기술품질원", 규격상태: "활성" |
-| "1005-01-570-0001 재고번호 조회" | 재고번호: "1005-01-570-0001" |
-| "박격포 관련 규격" | 적용장비명 또는 규격서명: "박격포" |
+```
+AI_PROVIDER=claude              # claude | gemini
+ANTHROPIC_API_KEY=sk-ant-...    # Claude 사용 시
+GEMINI_API_KEY=AIza...          # Gemini 사용 시
+PORT=3000                       # 선택
+KDSIS_CACHE_TTL_MS=60000        # 캐시 TTL (선택)
+KDSIS_SEARCH_TIMEOUT_MS=45000   # 검색 1회 wall-clock 타임아웃 (선택)
+```
+
+AI 키가 없으면 자동으로 규칙 기반 파싱으로 폴백합니다.
+
+## 기능
+
+### 검색
+- 자연어 → 검색 파라미터 (Claude/Gemini)
+- 직접 파라미터 지정 (`/api/search/direct`)
+- 규격번호, 적용장비명, 제정기관, 규격상태 등 10개 필드 지원
+- WebSquare 그리드 무한 스크롤 자동 처리 (최대 3회 추가 로딩)
+
+### 챗봇 UI
+- 카드 뷰 ↔ 표 뷰 토글
+- 컬럼 정렬 (오름/내림/해제)
+- 페이지네이션 (20/50/100/전체)
+- 검색어 하이라이트
+- 규격번호 1-클릭 복사
+- CSV / JSON 다운로드 (RFC 4180, BOM 포함)
+- 다크 모드 (시스템 감지 + 수동 토글)
+- 최근 검색 드롭다운 (↑↓ 키 네비게이션, screen reader 지원)
+- 키보드 단축키 (`?` 모달 참고)
+- 공유 가능한 URL 해시 (`#q=...` / `#p.규격번호=...`)
+- 세션 복원 (localStorage, 정렬·페이지 상태 포함)
+- WCAG 보강 (skip-to-content, ARIA, 포커스 트랩, aria-activedescendant)
+- 인쇄 스타일 (`@media print`)
+- 토스트 알림 (3개 캡)
+- 입력 글자 수 카운터 (400 경고 / 480 위험)
+- 스크롤 따라가기 + ↓ 최신 점프 버튼
+
+### 서버 인프라
+- **Chromium 싱글턴**: 프로세스 당 1개 브라우저 재사용, 콜드 스타트 3~5초 절감
+- **Serial 큐**: 동시 검색을 직렬화해 WebSquare 그리드 race 방지
+- **TTL LRU 캐시**: 동일 params 60초 캐싱, in-flight 중복 요청 dedup
+- **타임아웃 + 1회 재시도**: 45초 wall-clock, transient 에러만 재시도
+- **Graceful shutdown**: SIGTERM/SIGINT에서 브라우저 정리
 
 ## API
 
-### POST /api/search
-자연어 검색
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/api/search` | 자연어 검색 (`{ query }`) |
+| POST | `/api/search/direct` | 필드 직접 지정 (`{ params }`) |
+| GET  | `/api/health` | 브라우저/캐시/in-flight 상태 |
+| GET  | `/api/screenshot` | 마지막 검색 화면 캡처 |
+| GET/POST | `/api/debug` | 진단 모드 (DOM 상태 덤프) |
+| POST | `/api/debug/detail` | 첫 결과 상세 팝업 분석 |
 
-```json
-{ "query": "K2 소총 규격서 찾아줘" }
+### 예시
+
+```bash
+# 자연어
+curl -X POST http://localhost:3000/api/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "K2 소총 활성 규격"}'
+
+# 직접 지정
+curl -X POST http://localhost:3000/api/search/direct \
+  -H "Content-Type: application/json" \
+  -d '{"params": {"규격번호": "1005-0409"}}'
+
+# 헬스
+curl http://localhost:3000/api/health
 ```
-
-### POST /api/search/direct
-필드 직접 지정 검색
-
-```json
-{
-  "params": {
-    "적용장비명": "K2 소총",
-    "규격상태": "활성"
-  }
-}
-```
-
-### GET /api/screenshot
-마지막 검색의 KDSIS 화면 캡처 (디버깅용)
-
-## 결과 테이블 파싱 주의사항
-
-현재 결과 테이블 파싱 로직(`server.js`의 `page.evaluate` 부분)은
-KDSIS의 실제 결과 HTML 구조에 맞게 조정이 필요할 수 있습니다.
-
-**조정 방법:**
-1. 서버 실행 후 검색 실행
-2. `/api/screenshot`에서 캡처 이미지 확인
-3. KDSIS 결과 테이블의 실제 HTML 구조를 확인하여 셀렉터 수정
 
 ## 기술 스택
 
 - **Backend:** Node.js + Express
 - **브라우저 자동화:** Playwright (Chromium)
-- **Frontend:** Vanilla HTML/CSS/JS
-- **AI 파싱:** 규칙 기반 NLU (Claude API 연동 가능)
+- **Frontend:** Vanilla HTML/CSS/JS (단일 파일, 빌드 도구 없음)
+- **AI 파싱:** Claude (claude-sonnet-4) / Gemini (gemini-2.0-flash) / 규칙 기반 폴백
 
-## 향후 확장
+## 운영 노트
 
-- [ ] Claude API 연동으로 자연어 파싱 정확도 향상
-- [ ] 결과 테이블 셀렉터 KDSIS 실제 구조에 맞게 튜닝
-- [ ] 검색 결과 내 문서(한글, 도면) 다운로드 링크 파싱
-- [ ] 검색 이력 세션 관리 (저장하지 않음, 세션 중에만 유지)
+- 첫 검색은 Chromium 기동으로 5~10초 걸릴 수 있습니다. 이후 요청은 컨텍스트만 새로 만들어 ~3~7초.
+- 동일 검색을 60초 안에 반복하면 캐시에서 즉답합니다 (`__cached: true`).
+- 서버는 매 요청마다 브라우저를 종료하지 않습니다. `kill` / `Ctrl+C` 시 graceful shutdown으로 정리됩니다.
+- 결과가 0건일 때도 캐시되어, 잘못된 검색을 빠르게 거를 수 있습니다.
