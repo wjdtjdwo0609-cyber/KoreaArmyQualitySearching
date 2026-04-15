@@ -327,9 +327,50 @@
       .input-area{max-width:calc(1080px + 4rem)}
       body{font-size:1rem}
     }
+
+    /* Skip to content — WCAG 2.4.1. Hidden offscreen until Tab-focused. */
+    .skip-link{position:absolute;left:-9999px;top:0;background:var(--primary);color:#fff;padding:.5rem 1rem;border-radius:0 0 var(--r-sm) 0;z-index:10000;font-weight:600;text-decoration:none;font-size:.875rem}
+    .skip-link:focus{left:0;outline:2px solid var(--primary-light);outline-offset:2px}
+
+    /* Jump-to-latest button (shown when user has scrolled away from bottom) */
+    .jump-bottom{position:fixed;left:50%;bottom:6rem;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-full);padding:.4rem .9rem;font-size:.8125rem;font-weight:500;color:var(--text);cursor:pointer;box-shadow:var(--sh-md);z-index:500;display:inline-flex;align-items:center;gap:.25rem;font-family:var(--font);animation:fadeUp .2s ease-out}
+    .jump-bottom:hover{border-color:var(--primary-light);color:var(--primary)}
+    .jump-bottom[hidden]{display:none}
+
+    /* Input character counter */
+    .input-counter{font-size:.6875rem;color:var(--muted);text-align:right;margin-top:.25rem;font-variant-numeric:tabular-nums;font-family:var(--mono)}
+    .input-counter[hidden]{display:none}
+    .input-counter.warn{color:var(--warning);font-weight:500}
+    .input-counter.crit{color:var(--error);font-weight:600}
+
+    /* Print — strip the chat chrome so only messages/cards get inked */
+    @media print{
+      body{background:#fff;color:#000;overflow:visible;height:auto;font-size:10pt}
+      .app{height:auto;display:block}
+      .header,.input-area,.toasts,.modal,.recent-panel,.jump-bottom,.skip-link,
+      .debug-toggle,.debug-img,.view-toggle,.sort-control,.pagination,
+      .msg-actions,.welcome,.sample-wrap,.search-status,.skeleton-cards,
+      .reset-btn,#themeBtn,#shareBtn,#helpBtn,.status,.param-tag .pi,
+      .hint,#inputCounter,.recent-empty{display:none !important}
+      .messages{overflow:visible !important;padding:0;height:auto;display:block}
+      .msg{max-width:100%;margin:0 0 .5rem;padding:0;page-break-inside:avoid}
+      .msg--user .bubble,.msg--bot .bubble{background:#fff;color:#000;border:1px solid #888;box-shadow:none;max-width:100%}
+      .avatar{display:none}
+      .card{background:#fff;color:#000;border:1px solid #888;box-shadow:none;page-break-inside:avoid;break-inside:avoid}
+      .card-title,.card-meta,.card-dates,.card-more dd,.card-more dt{color:#000}
+      .spec-no,.spec-no.copyable{background:#eee;color:#000;border:1px solid #888}
+      .status-badge{border:1px solid #888;background:#fff;color:#000}
+      mark{background:#ffe;color:#000;border:1px solid #bbb;padding:0 2px}
+      .result-toolbar,.chip{background:#fff;color:#000;border:1px solid #888}
+      details.card-more{display:block}
+      details.card-more[open] summary,details.card-more summary{display:none}
+      details.card-more dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem .5rem;margin-top:.25rem;border-top:1px solid #ccc;padding-top:.25rem}
+      a,button{color:#000 !important;text-decoration:none}
+    }
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#messages">본문으로 건너뛰기</a>
   <div class="app">
     <header class="header" role="banner">
       <h1>🎖️ 국방 AI 어시스턴트 — KDSIS 실시간 검색</h1>
@@ -348,7 +389,7 @@
       </button>
     </header>
 
-    <main class="messages" id="messages" role="log" aria-live="polite" aria-label="대화 기록" aria-relevant="additions">
+    <main class="messages" id="messages" role="log" aria-live="polite" aria-label="대화 기록" aria-relevant="additions" tabindex="-1">
       <div class="welcome" id="welcome">
         <div class="welcome-icon" aria-hidden="true">🤖</div>
         <div class="badge">KDSIS 실시간 연동</div>
@@ -407,8 +448,11 @@
         </form>
       </div>
       <p class="hint" id="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+K 새 대화 · ? 단축키 · KDSIS 실시간 조회</p>
+      <div class="input-counter" id="inputCounter" aria-hidden="true" hidden>0 / 500</div>
     </div>
   </div>
+
+  <button type="button" class="jump-bottom" id="jumpBottom" hidden aria-label="최신 메시지로 이동">↓ 최신</button>
 
   <div class="toasts" id="toasts" role="region" aria-label="알림" aria-live="polite"></div>
 
@@ -445,12 +489,40 @@ const statusEl = document.getElementById("status");
 const welcome = document.getElementById("welcome");
 const resetBtn = document.getElementById("resetBtn");
 const themeBtn = document.getElementById("themeBtn");
+const jumpBtn = document.getElementById("jumpBottom");
+const inputCounter = document.getElementById("inputCounter");
 let busy = false;
 
+// ── Scroll follow ──
+// When the user has scrolled up to re-read earlier content, we must NOT yank
+// them back to the bottom on every new bot message. Same idea as ChatGPT/Slack:
+// auto-scroll only while "near bottom", otherwise surface a jump button.
+const NEAR_BOTTOM_PX = 80;
+let followBottom = true;
+function isNearBottom() {
+  return messages.scrollHeight - (messages.scrollTop + messages.clientHeight) <= NEAR_BOTTOM_PX;
+}
+messages.addEventListener("scroll", () => {
+  const near = isNearBottom();
+  if (near === followBottom) return;
+  followBottom = near;
+  jumpBtn.hidden = near;
+}, { passive: true });
+jumpBtn.addEventListener("click", () => scrollBottom(true));
+
 // ── Toast system ──
+// Cap at TOAST_MAX concurrent toasts — spam-clicking copy used to stack
+// forever. Oldest gets dropped instantly (no leave animation) so the newest
+// one is always visible at the bottom of the stack.
+const TOAST_MAX = 3;
 const toastsEl = document.getElementById("toasts");
 const TOAST_ICONS = { success: "✓", error: "✕", info: "ⓘ" };
 function toast(message, variant = "info", duration = 2200) {
+  while (toastsEl.children.length >= TOAST_MAX) {
+    const oldest = toastsEl.firstElementChild;
+    if (!oldest) break;
+    oldest.remove();
+  }
   const t = document.createElement("div");
   t.className = `toast toast--${variant}`;
   t.setAttribute("role", variant === "error" ? "alert" : "status");
@@ -685,30 +757,49 @@ function clearRecent() {
   hideRecent();
   toast("최근 검색을 모두 지웠습니다", "info");
 }
+// Stable option IDs so `input[aria-activedescendant]` can target them —
+// screen readers need a real id, not just visual highlight, to announce the
+// focused option in a combobox pattern.
+function recentOptionId(i) { return `recent-opt-${i}`; }
+function syncActiveDescendant() {
+  if (recentPanel.hidden || recentActiveIdx < 0) {
+    input.removeAttribute("aria-activedescendant");
+    input.removeAttribute("aria-expanded");
+    if (!recentPanel.hidden) input.setAttribute("aria-expanded", "true");
+    return;
+  }
+  input.setAttribute("aria-expanded", "true");
+  input.setAttribute("aria-activedescendant", recentOptionId(recentActiveIdx));
+}
 function renderRecent() {
   if (recentList.length === 0) {
     recentPanel.innerHTML = `<div class="recent-empty">최근 검색 기록이 없습니다</div>`;
+    syncActiveDescendant();
     return;
   }
   let html = `<div class="recent-head"><strong>최근 검색</strong><button class="recent-clear" type="button" data-recent-clear>모두 지우기</button></div>`;
   recentList.forEach((text, i) => {
-    html += `<div class="recent-item${i === recentActiveIdx ? " active" : ""}" role="option" aria-selected="${i === recentActiveIdx}" data-recent-idx="${i}">
+    html += `<div class="recent-item${i === recentActiveIdx ? " active" : ""}" id="${recentOptionId(i)}" role="option" aria-selected="${i === recentActiveIdx}" data-recent-idx="${i}">
       <span class="ri-icon" aria-hidden="true">🕐</span>
       <span class="ri-text">${esc(text)}</span>
       <button type="button" class="ri-remove" aria-label="제거" data-recent-remove="${esc(text)}">✕</button>
     </div>`;
   });
   recentPanel.innerHTML = html;
+  syncActiveDescendant();
 }
 function showRecent() {
   if (recentList.length === 0) return;
   recentActiveIdx = -1;
   renderRecent();
   recentPanel.hidden = false;
+  syncActiveDescendant();
 }
 function hideRecent() {
   recentPanel.hidden = true;
   recentActiveIdx = -1;
+  input.removeAttribute("aria-activedescendant");
+  input.removeAttribute("aria-expanded");
 }
 function moveRecentSelection(delta) {
   if (recentPanel.hidden) {
@@ -733,6 +824,7 @@ function applyRecent(text) {
   if (busy) return;
   input.value = text;
   sendBtn.disabled = false;
+  updateInputCounter();
   sendQuery(text);
 }
 
@@ -765,6 +857,7 @@ function resetChat() {
   welcome.style.display = "";
   input.value = "";
   input.style.height = "auto";
+  updateInputCounter();
   sendBtn.disabled = true;
   clearSession();
   resultDataByUid.clear();
@@ -854,10 +947,24 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ── Input handling ──
+const INPUT_MAX = 500;  // matches textarea maxlength — keep in sync
+function updateInputCounter() {
+  const n = input.value.length;
+  if (n === 0) {
+    inputCounter.hidden = true;
+    inputCounter.classList.remove("warn", "crit");
+    return;
+  }
+  inputCounter.hidden = false;
+  inputCounter.textContent = `${n} / ${INPUT_MAX}`;
+  inputCounter.classList.toggle("warn", n >= 400 && n < 480);
+  inputCounter.classList.toggle("crit", n >= 480);
+}
 input.addEventListener("input", () => {
   input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight, 120) + "px";
   sendBtn.disabled = input.value.trim().length === 0;
+  updateInputCounter();
   // Hide the recent panel as soon as the user starts typing
   if (input.value.length > 0) hideRecent();
 });
@@ -976,6 +1083,7 @@ async function runDirectSearch(params, displayText) {
   addMessage(displayText, "user");
   input.value = "";
   input.style.height = "auto";
+  updateInputCounter();
   sendBtn.disabled = true;
   setStatus("KDSIS 검색 중…", true);
 
@@ -1027,6 +1135,7 @@ async function sendQuery(text) {
   addMessage(text, "user");
   input.value = "";
   input.style.height = "auto";
+  updateInputCounter();
   sendBtn.disabled = true;
   setStatus("KDSIS 검색 중…", true);
 
@@ -1091,7 +1200,9 @@ function addMessage(text, role) {
   }
   messages.appendChild(div);
   if (role === "user") pushEvent({ type: "user", text });
-  scrollBottom();
+  // User-sent messages always force a scroll (they expect to see their input
+  // land at the bottom). Bot messages respect follow-bottom state.
+  scrollBottom(role === "user");
 }
 
 function addBotMessage(html, opts) {
@@ -1132,6 +1243,9 @@ const PRIMARY_FIELDS = new Set([
 
 // Map from uid → { data, sort, page, pageSize }, for CSV export and re-render
 const resultDataByUid = new Map();
+// uid → index into sessionEvents[] so rerender() can update the persisted
+// sort/page/pageSize fields without rescanning the array.
+const resultEventIndexByUid = new Map();
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 0]; // 0 → all
 
@@ -1257,8 +1371,13 @@ const CARD_SORT_COLUMNS = [
 
 function addResultMessage(data) {
   const uid = "r" + Date.now() + Math.floor(Math.random() * 1000);
-  const initialPageSize = data.rows.length > PAGE_SIZE_DEFAULT ? PAGE_SIZE_DEFAULT : 0;
-  resultDataByUid.set(uid, { data, sort: null, page: 0, pageSize: initialPageSize });
+  // Pull restored state when this is a session replay; otherwise defaults.
+  const defaultPageSize = data.rows.length > PAGE_SIZE_DEFAULT ? PAGE_SIZE_DEFAULT : 0;
+  const restoredSort = data.__sort && data.__sort.col ? { col: data.__sort.col, dir: data.__sort.dir || "asc" } : null;
+  const restoredPage = Number.isInteger(data.__page) ? data.__page : 0;
+  const restoredPageSize = (typeof data.__pageSize === "number") ? data.__pageSize : defaultPageSize;
+  const initialPageSize = restoredPageSize;
+  resultDataByUid.set(uid, { data, sort: restoredSort, page: restoredPage, pageSize: initialPageSize });
   const terms = deriveHighlightTerms(data);
   let html = "";
 
@@ -1307,7 +1426,20 @@ function addResultMessage(data) {
 
   addBotMessage(html, { skipPersist: true });
   // Persist structured payload so we can re-render after reload without re-fetching
-  pushEvent({ type: "result", data: serializableResult(data) });
+  pushEvent({
+    type: "result",
+    data: serializableResult(data),
+    sort: restoredSort,
+    page: restoredPage,
+    pageSize: restoredPageSize,
+  });
+  resultEventIndexByUid.set(uid, sessionEvents.length - 1);
+  // If we restored non-default state, re-render so sort/page are applied
+  // (the HTML above was generated for page 0, no sort; rerender is a cheap
+  // pure-DOM sync that also updates the toolbar controls).
+  if (restoredSort || restoredPage > 0 || restoredPageSize !== defaultPageSize) {
+    rerender(uid);
+  }
 }
 
 // Slice rows for the given page; pageSize 0 means "all in one page"
@@ -1371,6 +1503,19 @@ function rerender(uid) {
     const dir = sort ? sort.dir : "asc";
     dirBtn.textContent = dir === "desc" ? "▼" : "▲";
     dirBtn.title = dir === "desc" ? "내림차순" : "오름차순";
+  }
+
+  // Persist the latest sort/page/pageSize so reloading the page restores
+  // the same view state (not just the rows). suppressPersist is on during
+  // session replay, so this is a no-op there.
+  if (!suppressPersist) {
+    const evIdx = resultEventIndexByUid.get(uid);
+    if (evIdx != null && sessionEvents[evIdx] && sessionEvents[evIdx].type === "result") {
+      sessionEvents[evIdx].sort = entry.sort;
+      sessionEvents[evIdx].page = entry.page;
+      sessionEvents[evIdx].pageSize = entry.pageSize;
+      saveSession();
+    }
   }
 }
 // Back-compat alias: applySort now just forwards to rerender
@@ -1583,9 +1728,14 @@ function setStatus(text, isBusy) {
   statusEl.className = "status" + (isBusy ? " busy" : "");
 }
 
-function scrollBottom() {
+// Auto-scroll only when user is tracking the bottom; pass force=true for
+// user-initiated events (their own send, restore, clicking the jump button).
+function scrollBottom(force) {
+  if (!force && !followBottom) return;
   requestAnimationFrame(() => {
     messages.scrollTop = messages.scrollHeight;
+    followBottom = true;
+    jumpBtn.hidden = true;
   });
 }
 
@@ -1647,13 +1797,19 @@ function restoreSession() {
     try {
       if (ev.type === "user") addMessage(ev.text, "user");
       else if (ev.type === "bot") addBotMessage(ev.html);
-      else if (ev.type === "result" && ev.data) addResultMessage({ ...ev.data, __restored: true });
+      else if (ev.type === "result" && ev.data) addResultMessage({
+        ...ev.data,
+        __restored: true,
+        __sort: ev.sort || null,
+        __page: ev.page || 0,
+        __pageSize: (typeof ev.pageSize === "number") ? ev.pageSize : undefined,
+      });
     } catch (e) {
       console.warn("session replay skipped:", e);
     }
   }
   messages.style.scrollBehavior = prev || "smooth";
-  scrollBottom();
+  scrollBottom(true);
 }
 
 // If the page loaded with a share hash, run that search instead of
