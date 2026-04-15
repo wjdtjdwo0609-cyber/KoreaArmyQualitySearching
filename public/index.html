@@ -334,6 +334,9 @@
     <header class="header" role="banner">
       <h1>🎖️ 국방 AI 어시스턴트 — KDSIS 실시간 검색</h1>
       <span class="status" id="status" role="status" aria-live="polite">● 온라인</span>
+      <button class="icon-btn" id="shareBtn" type="button" aria-label="현재 검색 공유 링크 복사" title="공유 링크 복사 (Shift+S)">
+        <span aria-hidden="true">🔗</span>
+      </button>
       <button class="icon-btn" id="helpBtn" type="button" aria-label="키보드 단축키 도움말" aria-haspopup="dialog" title="단축키 (?)">
         <span aria-hidden="true">?</span>
       </button>
@@ -403,7 +406,7 @@
           <button class="send-btn" type="submit" id="sendBtn" disabled aria-label="전송">▲</button>
         </form>
       </div>
-      <p class="hint" id="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+K 새 대화 · Shift+D 테마 · ↑↓ 최근 검색 · KDSIS 실시간 조회</p>
+      <p class="hint" id="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+K 새 대화 · ? 단축키 · KDSIS 실시간 조회</p>
     </div>
   </div>
 
@@ -423,6 +426,7 @@
           <dt><kbd>Shift</kbd> + <kbd>Enter</kbd></dt><dd>줄바꿈</dd>
           <dt><kbd>Ctrl</kbd> + <kbd>K</kbd></dt><dd>새 대화 시작 (대화 기록 삭제)</dd>
           <dt><kbd>Shift</kbd> + <kbd>D</kbd></dt><dd>라이트 ↔ 다크 모드 전환</dd>
+          <dt><kbd>Shift</kbd> + <kbd>S</kbd></dt><dd>공유 링크 복사</dd>
           <dt><kbd>?</kbd></dt><dd>이 도움말 열기</dd>
           <dt><kbd>Esc</kbd></dt><dd>도움말 닫기</dd>
           <dt><kbd>/</kbd></dt><dd>입력창 포커스</dd>
@@ -456,6 +460,60 @@ function toast(message, variant = "info", duration = 2200) {
     t.classList.add("leaving");
     t.addEventListener("animationend", () => t.remove(), { once: true });
   }, duration);
+}
+
+// ── Shareable URL ──
+// Encodes the latest search into location.hash so the link can be shared.
+// Shape:
+//   #q=<natural language>                    (kind=query)
+//   #p.<field>=<value>&p.<field2>=<value2>&label=<display>   (kind=direct)
+function searchToHash(search) {
+  if (!search) return "";
+  const sp = new URLSearchParams();
+  if (search.kind === "query") {
+    sp.set("q", search.text || "");
+  } else if (search.kind === "direct") {
+    if (search.label) sp.set("label", search.label);
+    for (const [k, v] of Object.entries(search.params || {})) {
+      if (v != null && String(v).trim()) sp.set("p." + k, String(v));
+    }
+  }
+  return sp.toString();
+}
+function hashToSearch(hash) {
+  const raw = String(hash || "").replace(/^#/, "");
+  if (!raw) return null;
+  let sp;
+  try { sp = new URLSearchParams(raw); } catch { return null; }
+  if (sp.has("q")) return { kind: "query", text: sp.get("q") };
+  const params = {};
+  for (const [k, v] of sp.entries()) {
+    if (k.startsWith("p.")) params[k.slice(2)] = v;
+  }
+  if (Object.keys(params).length > 0) {
+    return { kind: "direct", params, label: sp.get("label") || Object.values(params).join(" ") };
+  }
+  return null;
+}
+function updateShareHash(search) {
+  const hash = searchToHash(search);
+  if (!hash) return;
+  // Use replaceState so repeat searches don't pollute back-history, but
+  // the first one from a fresh page still pushes so Back returns to blank.
+  const newUrl = location.pathname + location.search + "#" + hash;
+  if (location.hash) history.replaceState(null, "", newUrl);
+  else history.pushState(null, "", newUrl);
+}
+async function copyShareLink() {
+  if (!lastSearch) {
+    toast("공유할 검색이 없습니다", "info");
+    return;
+  }
+  updateShareHash(lastSearch);
+  const fullUrl = location.href;
+  const ok = await copyText(fullUrl);
+  if (ok) toast("공유 링크를 복사했습니다", "success");
+  else toast("링크 복사에 실패했습니다", "error");
 }
 
 // ── CSV export ──
@@ -709,9 +767,14 @@ function resetChat() {
   input.style.height = "auto";
   sendBtn.disabled = true;
   clearSession();
+  resultDataByUid.clear();
+  lastSearch = null;
+  // Drop the share hash too — we're on a clean slate
+  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   input.focus();
 }
 resetBtn.addEventListener("click", resetChat);
+document.getElementById("shareBtn").addEventListener("click", copyShareLink);
 
 // ── Help modal ──
 const helpModal = document.getElementById("helpModal");
@@ -771,6 +834,11 @@ document.addEventListener("keydown", (e) => {
   if (e.shiftKey && e.key === "D") {
     e.preventDefault();
     applyTheme(currentTheme() === "dark" ? "light" : "dark", true);
+    return;
+  }
+  if (e.shiftKey && e.key === "S") {
+    e.preventDefault();
+    copyShareLink();
     return;
   }
   if (e.key === "?" || (e.shiftKey && e.key === "/")) {
@@ -901,6 +969,7 @@ form.addEventListener("submit", (e) => {
 async function runDirectSearch(params, displayText) {
   busy = true;
   lastSearch = { kind: "direct", params, label: displayText };
+  updateShareHash(lastSearch);
   rememberRecent(displayText);
   hideRecent();
   welcome.style.display = "none";
@@ -951,6 +1020,7 @@ async function runDirectSearch(params, displayText) {
 async function sendQuery(text) {
   busy = true;
   lastSearch = { kind: "query", text };
+  updateShareHash(lastSearch);
   rememberRecent(text);
   hideRecent();
   welcome.style.display = "none";
@@ -1585,7 +1655,33 @@ function restoreSession() {
   messages.style.scrollBehavior = prev || "smooth";
   scrollBottom();
 }
-restoreSession();
+
+// If the page loaded with a share hash, run that search instead of
+// restoring the stale session. This is what makes shared links work.
+function runHashSearchOrRestore() {
+  const fromHash = hashToSearch(location.hash);
+  if (fromHash) {
+    // A fresh hash-driven load clears the local session so the
+    // shared link becomes the new canonical state
+    clearSession();
+    if (fromHash.kind === "query") sendQuery(fromHash.text);
+    else runDirectSearch(fromHash.params, fromHash.label);
+    return;
+  }
+  restoreSession();
+}
+runHashSearchOrRestore();
+
+// Back/forward buttons: navigate between share hashes without a reload
+window.addEventListener("popstate", () => {
+  const next = hashToSearch(location.hash);
+  if (!next || busy) return;
+  // Reset chat and run the hash search; the user's intent is "go back to
+  // that shared view", not "keep stacking on top of the current one"
+  resetChat();
+  if (next.kind === "query") sendQuery(next.text);
+  else runDirectSearch(next.params, next.label);
+});
 </script>
 </body>
 </html>
