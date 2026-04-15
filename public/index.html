@@ -137,6 +137,17 @@
     .result-table th.sortable:hover{background:var(--surface-alt);color:var(--text)}
     .result-table th.sorted{color:var(--primary);background:var(--primary-tint)}
 
+    /* Pagination */
+    .pagination{margin-top:.75rem}
+    .pagination:empty{display:none}
+    .pagination-inner{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:.8125rem;color:var(--muted)}
+    .pgn-btn{font-size:.8125rem;padding:.375rem .75rem;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:var(--r-sm);cursor:pointer;font-family:var(--font);transition:all .15s}
+    .pgn-btn:hover:not(:disabled){border-color:var(--primary-light);background:var(--surface-alt);color:var(--primary)}
+    .pgn-btn:disabled{opacity:.4;cursor:not-allowed}
+    .pgn-info{font-weight:500;padding:0 .5rem;min-width:4.5rem;text-align:center}
+    .pgn-size-label{margin-left:auto;display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem}
+    .pgn-size{font-size:.75rem;padding:3px 6px;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:var(--r-sm);font-family:var(--font);cursor:pointer}
+
     /* Cards */
     .cards{display:grid;gap:.75rem}
     .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:.875rem 1rem;transition:all .15s}
@@ -1034,8 +1045,10 @@ const PRIMARY_FIELDS = new Set([
   "제정일자","최종개정일자","품명","형상관리책임기관(1)","형상관리책임기관(2)","형상관리책임기관(3)",
 ]);
 
-// Map from uid → { data, sort }, for CSV export and re-render after sort
+// Map from uid → { data, sort, page, pageSize }, for CSV export and re-render
 const resultDataByUid = new Map();
+const PAGE_SIZE_DEFAULT = 20;
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 0]; // 0 → all
 
 // Pure non-empty comparison: numbers as numbers, ISO dates lex, else locale
 function compareVals(a, b) {
@@ -1159,7 +1172,8 @@ const CARD_SORT_COLUMNS = [
 
 function addResultMessage(data) {
   const uid = "r" + Date.now() + Math.floor(Math.random() * 1000);
-  resultDataByUid.set(uid, { data, sort: null });
+  const initialPageSize = data.rows.length > PAGE_SIZE_DEFAULT ? PAGE_SIZE_DEFAULT : 0;
+  resultDataByUid.set(uid, { data, sort: null, page: 0, pageSize: initialPageSize });
   const terms = deriveHighlightTerms(data);
   let html = "";
 
@@ -1189,9 +1203,15 @@ function addResultMessage(data) {
   html += `<button class="view-toggle" type="button" data-download-csv="${uid}" title="CSV로 다운로드">⬇ CSV</button>`;
   html += "</div>";
 
-  // Card + table views
-  html += `<div class="cards" id="${uid}-cards">${renderCardsHtml(data, data.rows, terms)}</div>`;
-  html += `<div class="result-wrap hidden" id="${uid}-table">${renderTableHtml(data, data.rows, terms, null)}</div>`;
+  // Initial slice for first page
+  const { slice, totalPages, pageSize } = pageSlice(data.rows, 0, initialPageSize);
+
+  // Card + table views (paged)
+  html += `<div class="cards" id="${uid}-cards">${renderCardsHtml(data, slice, terms)}</div>`;
+  html += `<div class="result-wrap hidden" id="${uid}-table">${renderTableHtml(data, slice, terms, null)}</div>`;
+
+  // Pagination bar (only if meaningful)
+  html += `<div class="pagination" id="${uid}-pagination">${renderPaginationHtml(uid, 0, totalPages, pageSize, data.rows.length)}</div>`;
 
   // 스크린샷 (신규 결과 한정 — 복원 시에는 stale URL이라 생략)
   if (!data.__restored) {
@@ -1204,18 +1224,60 @@ function addResultMessage(data) {
   pushEvent({ type: "result", data: serializableResult(data) });
 }
 
-// Re-render card and table bodies for a uid based on its stored sort state
-function applySort(uid) {
+// Slice rows for the given page; pageSize 0 means "all in one page"
+function pageSlice(rows, page, pageSize) {
+  const total = rows.length;
+  if (!pageSize || pageSize <= 0 || pageSize >= total) {
+    return { slice: rows, totalPages: 1, pageSize: 0 };
+  }
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const p = Math.min(Math.max(0, page), totalPages - 1);
+  const start = p * pageSize;
+  return { slice: rows.slice(start, start + pageSize), totalPages, pageSize };
+}
+
+// Pagination bar — hidden when there's only one page (and no resize control needed)
+function renderPaginationHtml(uid, page, totalPages, pageSize, totalRows) {
+  // Don't bother showing the bar for tiny result sets
+  if (totalRows <= PAGE_SIZE_OPTIONS[0] && pageSize === 0) return "";
+  const displayPage = page + 1;
+  const hasPrev = page > 0 && totalPages > 1;
+  const hasNext = page < totalPages - 1 && totalPages > 1;
+  let html = '<div class="pagination-inner">';
+  html += `<button type="button" class="pgn-btn" data-page="prev" data-uid="${uid}" ${hasPrev ? "" : "disabled"} aria-label="이전 페이지">← 이전</button>`;
+  html += `<span class="pgn-info">${displayPage} / ${totalPages}</span>`;
+  html += `<button type="button" class="pgn-btn" data-page="next" data-uid="${uid}" ${hasNext ? "" : "disabled"} aria-label="다음 페이지">다음 →</button>`;
+  html += `<label class="pgn-size-label">페이지당 <select class="pgn-size" data-uid="${uid}" aria-label="페이지당 행 수">`;
+  PAGE_SIZE_OPTIONS.forEach((v) => {
+    const label = v === 0 ? "전체" : String(v);
+    html += `<option value="${v}"${v === pageSize ? " selected" : ""}>${label}</option>`;
+  });
+  html += "</select></label>";
+  html += "</div>";
+  return html;
+}
+
+// Re-render card, table, and pagination bodies for a uid based on stored state
+function rerender(uid) {
   const entry = resultDataByUid.get(uid);
   if (!entry) return;
-  const { data, sort } = entry;
+  const { data, sort, page, pageSize } = entry;
   const terms = deriveHighlightTerms(data);
   const sortedRows = sort && sort.col ? sortRows(data.rows, sort.col, sort.dir) : data.rows;
+  const { slice, totalPages, pageSize: effective } = pageSlice(sortedRows, page, pageSize);
+  // Clamp stored page if data changed — pageSlice already clamps the slice
+  // but we want our state to stay consistent for the next interaction
+  if (page >= totalPages) entry.page = Math.max(0, totalPages - 1);
+
   const cardsEl = document.getElementById(uid + "-cards");
   const tableWrap = document.getElementById(uid + "-table");
-  if (cardsEl) cardsEl.innerHTML = renderCardsHtml(data, sortedRows, terms);
-  if (tableWrap) tableWrap.innerHTML = renderTableHtml(data, sortedRows, terms, sort);
-  // Sync the card-sort controls so they reflect the active state
+  if (cardsEl) cardsEl.innerHTML = renderCardsHtml(data, slice, terms);
+  if (tableWrap) tableWrap.innerHTML = renderTableHtml(data, slice, terms, sort);
+
+  const pgnEl = document.getElementById(uid + "-pagination");
+  if (pgnEl) pgnEl.innerHTML = renderPaginationHtml(uid, entry.page, totalPages, pageSize, data.rows.length);
+
+  // Sync sort controls
   const sel = document.querySelector(`[data-sort-select="${uid}"]`);
   if (sel) sel.value = sort ? sort.col : "";
   const dirBtn = document.querySelector(`[data-sort-dir="${uid}"]`);
@@ -1225,6 +1287,8 @@ function applySort(uid) {
     dirBtn.title = dir === "desc" ? "내림차순" : "오름차순";
   }
 }
+// Back-compat alias: applySort now just forwards to rerender
+const applySort = rerender;
 
 // Strip non-essential fields before storing
 function serializableResult(data) {
@@ -1325,7 +1389,8 @@ async function handleClickDelegated(e) {
     else if (entry.sort.dir === "asc") next = { col, dir: "desc" };
     else next = null; // third click clears sort
     entry.sort = next;
-    applySort(uid);
+    entry.page = 0;  // reset to first page when sort changes
+    rerender(uid);
     return;
   }
   // Card view sort direction toggle
@@ -1339,22 +1404,47 @@ async function handleClickDelegated(e) {
       return;
     }
     entry.sort = { col: entry.sort.col, dir: entry.sort.dir === "asc" ? "desc" : "asc" };
-    applySort(uid);
+    entry.page = 0;
+    rerender(uid);
+    return;
+  }
+  // Pagination — prev / next
+  const pgnBtn = e.target.closest("[data-page]");
+  if (pgnBtn) {
+    const uid = pgnBtn.dataset.uid;
+    const entry = resultDataByUid.get(uid);
+    if (!entry) return;
+    if (pgnBtn.dataset.page === "prev") entry.page = Math.max(0, entry.page - 1);
+    else entry.page = entry.page + 1; // rerender clamps
+    rerender(uid);
     return;
   }
 }
 messages.addEventListener("click", handleClickDelegated);
 
-// Card sort select is a change event, not click
+// Change events: sort select + page size select
 messages.addEventListener("change", (e) => {
-  const sel = e.target.closest("[data-sort-select]");
-  if (!sel) return;
-  const uid = sel.dataset.sortSelect;
-  const entry = resultDataByUid.get(uid);
-  if (!entry) return;
-  const col = sel.value;
-  entry.sort = col ? { col, dir: (entry.sort && entry.sort.dir) || "asc" } : null;
-  applySort(uid);
+  const sortSel = e.target.closest("[data-sort-select]");
+  if (sortSel) {
+    const uid = sortSel.dataset.sortSelect;
+    const entry = resultDataByUid.get(uid);
+    if (!entry) return;
+    const col = sortSel.value;
+    entry.sort = col ? { col, dir: (entry.sort && entry.sort.dir) || "asc" } : null;
+    entry.page = 0;
+    rerender(uid);
+    return;
+  }
+  const sizeSel = e.target.closest(".pgn-size");
+  if (sizeSel) {
+    const uid = sizeSel.dataset.uid;
+    const entry = resultDataByUid.get(uid);
+    if (!entry) return;
+    entry.pageSize = Number(sizeSel.value) || 0;
+    entry.page = 0;
+    rerender(uid);
+    return;
+  }
 });
 
 let typingCounter = 0;
