@@ -202,6 +202,24 @@
     /* sr-only for screen readers */
     .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
+    /* Toast — bottom center, stack */
+    .toasts{position:fixed;left:50%;bottom:1.25rem;transform:translateX(-50%);display:flex;flex-direction:column;gap:.5rem;z-index:9999;pointer-events:none;width:max-content;max-width:calc(100vw - 2rem)}
+    .toast{display:inline-flex;align-items:center;gap:.625rem;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--r-md);padding:.625rem 1rem;font-size:.875rem;font-weight:500;box-shadow:var(--sh-md);pointer-events:auto;animation:toastIn .25s ease-out;max-width:90vw}
+    .toast.toast--success{border-color:var(--green);color:var(--green-dark)}
+    .toast.toast--error{border-color:var(--error);color:var(--error)}
+    .toast.toast--info{border-color:var(--primary-light);color:var(--primary)}
+    .toast.leaving{animation:toastOut .2s ease-in forwards}
+    .toast .toast-icon{flex-shrink:0;font-size:1rem;line-height:1}
+    @keyframes toastIn{from{opacity:0;transform:translateY(.75rem)}to{opacity:1;transform:translateY(0)}}
+    @keyframes toastOut{to{opacity:0;transform:translateY(.5rem)}}
+
+    /* Copy affordance on spec-no — element is a <button> when copyable */
+    .spec-no.copyable{cursor:pointer;border:1px dashed transparent;display:inline-flex;align-items:center;gap:.25rem;font-family:var(--mono);font-size:.8125rem;font-weight:600;line-height:1;padding:3px 8px}
+    .spec-no.copyable:hover{background:var(--primary-tint-strong);border-color:var(--primary-light)}
+    .spec-no.copyable::after{content:"⧉";font-size:.75rem;opacity:.6}
+    .spec-no.copyable.copied{background:var(--green-badge);color:var(--green-dark)}
+    .spec-no.copyable.copied::after{content:"✓";opacity:1}
+
     @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
     @keyframes bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
@@ -267,7 +285,7 @@
           <div class="cards" style="max-width:640px;width:100%">
             <div class="card" role="button" tabindex="0" style="cursor:pointer" data-sample-params='{"규격번호":"1005-0409"}' data-sample-label="구경50미리" aria-label="샘플 결과로 검색 실행: 구경50미리" title="클릭하면 이 결과로 실제 검색합니다">
               <div class="card-head">
-                <span class="spec-no">1005-0409</span>
+                <button type="button" class="spec-no copyable" data-copy="1005-0409" title="규격번호 복사" aria-label="규격번호 1005-0409 복사">1005-0409</button>
                 <span class="spec-kind">KDS (국방/정식)</span>
                 <span class="status-badge status-active">활성</span>
               </div>
@@ -307,6 +325,8 @@
     </div>
   </div>
 
+  <div class="toasts" id="toasts" role="region" aria-label="알림" aria-live="polite"></div>
+
 <script>
 const messages = document.getElementById("messages");
 const form = document.getElementById("form");
@@ -317,6 +337,44 @@ const welcome = document.getElementById("welcome");
 const resetBtn = document.getElementById("resetBtn");
 const themeBtn = document.getElementById("themeBtn");
 let busy = false;
+
+// ── Toast system ──
+const toastsEl = document.getElementById("toasts");
+const TOAST_ICONS = { success: "✓", error: "✕", info: "ⓘ" };
+function toast(message, variant = "info", duration = 2200) {
+  const t = document.createElement("div");
+  t.className = `toast toast--${variant}`;
+  t.setAttribute("role", variant === "error" ? "alert" : "status");
+  t.innerHTML = `<span class="toast-icon" aria-hidden="true">${TOAST_ICONS[variant] || "ⓘ"}</span><span>${esc(message)}</span>`;
+  toastsEl.appendChild(t);
+  setTimeout(() => {
+    t.classList.add("leaving");
+    t.addEventListener("animationend", () => t.remove(), { once: true });
+  }, duration);
+}
+
+// ── Clipboard ──
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    // Fallback for non-secure contexts (http://localhost is fine, but http://ip is not)
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
 
 // ── Theme ──
 const THEME_KEY = "kdsis-theme";
@@ -663,7 +721,7 @@ function addResultMessage(data) {
 
     html += '<div class="card">';
     html += '<div class="card-head">';
-    if (specNo) html += `<span class="spec-no">${esc(specNo)}</span>`;
+    if (specNo) html += `<button type="button" class="spec-no copyable" data-copy="${esc(specNo)}" title="규격번호 복사" aria-label="규격번호 ${esc(specNo)} 복사">${esc(specNo)}</button>`;
     if (specKind) html += `<span class="spec-kind">${esc(specKind)}</span>`;
     if (status) html += `<span class="status-badge ${statusClass(status)}">${esc(status)}</span>`;
     html += "</div>";
@@ -743,8 +801,24 @@ function serializableResult(data) {
   };
 }
 
-// 결과 내 버튼 위임 (뷰 토글, 캡처 토글)
-messages.addEventListener("click", (e) => {
+// 결과 내 버튼 위임 (뷰 토글, 캡처 토글, 규격번호 복사)
+async function handleClickDelegated(e) {
+  // Spec number copy — works for both result cards and the welcome sample card
+  const copyBtn = e.target.closest("[data-copy]");
+  if (copyBtn) {
+    e.preventDefault();
+    e.stopPropagation();   // don't trigger sample-card search
+    const text = copyBtn.dataset.copy;
+    const ok = await copyText(text);
+    if (ok) {
+      copyBtn.classList.add("copied");
+      setTimeout(() => copyBtn.classList.remove("copied"), 1200);
+      toast(`복사됨: ${text}`, "success");
+    } else {
+      toast("복사에 실패했습니다", "error");
+    }
+    return;
+  }
   const viewBtn = e.target.closest("[data-toggle-view]");
   if (viewBtn) {
     const uid = viewBtn.dataset.toggleView;
@@ -767,7 +841,8 @@ messages.addEventListener("click", (e) => {
     dbgBtn.textContent = shown ? "📸 캡처 숨기기" : "📸 검색 화면 캡처 보기";
     return;
   }
-});
+}
+messages.addEventListener("click", handleClickDelegated);
 
 let typingCounter = 0;
 function addTyping() {
