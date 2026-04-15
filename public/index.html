@@ -120,8 +120,22 @@
     .result-toolbar{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap}
     .chip{font-size:.75rem;padding:4px 10px;border-radius:var(--r-full);font-weight:500;background:var(--surface-alt);color:var(--text)}
     .chip-count{background:var(--primary-tint-strong);color:var(--primary)}
-    .view-toggle{margin-left:auto;font-size:.75rem;padding:4px 10px;border:1px solid var(--border);background:var(--surface);border-radius:var(--r-sm);cursor:pointer;color:var(--muted);font-family:var(--font);transition:all .15s}
+    .view-toggle{font-size:.75rem;padding:4px 10px;border:1px solid var(--border);background:var(--surface);border-radius:var(--r-sm);cursor:pointer;color:var(--muted);font-family:var(--font);transition:all .15s}
     .view-toggle:hover{background:var(--surface-alt);color:var(--text)}
+    .result-toolbar .view-toggle:first-of-type{margin-left:auto}
+
+    /* Sort control (card view) */
+    .sort-control{display:inline-flex;align-items:center;gap:.25rem;font-size:.75rem;color:var(--muted)}
+    .sort-control .sort-label{font-weight:500;white-space:nowrap}
+    .sort-select{font-size:.75rem;padding:4px 8px;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:var(--r-sm);font-family:var(--font);cursor:pointer;max-width:140px}
+    .sort-select:hover{border-color:var(--primary-light)}
+    .sort-dir{font-size:.75rem;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border);background:var(--surface);color:var(--muted);border-radius:var(--r-sm);cursor:pointer;font-family:var(--font);transition:all .15s;padding:0;line-height:1}
+    .sort-dir:hover{border-color:var(--primary-light);color:var(--primary)}
+
+    /* Sortable table header */
+    .result-table th.sortable{cursor:pointer;user-select:none;transition:background .1s}
+    .result-table th.sortable:hover{background:var(--surface-alt);color:var(--text)}
+    .result-table th.sorted{color:var(--primary);background:var(--primary-tint)}
 
     /* Cards */
     .cards{display:grid;gap:.75rem}
@@ -1020,36 +1034,39 @@ const PRIMARY_FIELDS = new Set([
   "제정일자","최종개정일자","품명","형상관리책임기관(1)","형상관리책임기관(2)","형상관리책임기관(3)",
 ]);
 
-// Map from uid → raw result data, for CSV export after render
+// Map from uid → { data, sort }, for CSV export and re-render after sort
 const resultDataByUid = new Map();
 
-function addResultMessage(data) {
-  const uid = "r" + Date.now() + Math.floor(Math.random() * 1000);
-  resultDataByUid.set(uid, data);
-  const terms = deriveHighlightTerms(data);
+// Pure non-empty comparison: numbers as numbers, ISO dates lex, else locale
+function compareVals(a, b) {
+  const sa = String(a).trim(), sb = String(b).trim();
+  const na = Number(sa), nb = Number(sb);
+  if (!Number.isNaN(na) && !Number.isNaN(nb) && sa !== "" && sb !== "") {
+    return na - nb;
+  }
+  // ISO date (YYYY-MM-DD) — lexicographic compare works correctly
+  return sa.localeCompare(sb, "ko");
+}
+// Sort with empty values always pinned to the BOTTOM regardless of direction.
+// Done outside the sign flip so desc doesn't push them to the top.
+function sortRows(rows, col, dir) {
+  if (!col) return rows;
+  const sign = dir === "desc" ? -1 : 1;
+  return [...rows].sort((r1, r2) => {
+    const a = r1[col], b = r2[col];
+    const aEmpty = isEmpty(a), bEmpty = isEmpty(b);
+    if (aEmpty && bEmpty) return 0;
+    if (aEmpty) return 1;
+    if (bEmpty) return -1;
+    return sign * compareVals(a, b);
+  });
+}
+
+// Build card list HTML for a given row set
+function renderCardsHtml(data, rows, terms) {
   const hi = (v) => highlight(v, terms);
   let html = "";
-
-  // 검색 파라미터 태그
-  if (data.searchParams && Object.keys(data.searchParams).length > 0) {
-    html += '<div class="search-params">';
-    for (const [k, v] of Object.entries(data.searchParams)) {
-      html += `<span class="param-tag">${esc(k)}: ${esc(v)}</span>`;
-    }
-    html += "</div>";
-  }
-
-  // 툴바 (카운트 + 뷰 토글 + CSV)
-  html += '<div class="result-toolbar" role="toolbar" aria-label="결과 뷰 옵션">';
-  html += `<span class="chip chip-count">🔍 총 <strong>${data.totalCount}</strong>건</span>`;
-  html += `<span class="chip">${data.rows.length}건 표시</span>`;
-  html += `<button class="view-toggle" type="button" data-toggle-view="${uid}" aria-pressed="false">📊 표로 보기</button>`;
-  html += `<button class="view-toggle" type="button" data-download-csv="${uid}" title="CSV로 다운로드">⬇ CSV</button>`;
-  html += "</div>";
-
-  // 카드 뷰
-  html += `<div class="cards" id="${uid}-cards">`;
-  data.rows.forEach((row) => {
+  rows.forEach((row) => {
     const specNo = row["규격번호"] || "";
     const specKind = row["규격종류"] || "";
     const title = row["규격서명"] || row["품명"] || "(제목 없음)";
@@ -1085,7 +1102,6 @@ function addResultMessage(data) {
       html += "</div>";
     }
 
-    // 나머지 필드는 접힌 상세로
     const secondary = [];
     if (orgHierarchy) secondary.push(["형상관리책임기관", orgHierarchy]);
     data.columns.forEach((col) => {
@@ -1094,7 +1110,6 @@ function addResultMessage(data) {
       if (isEmpty(v)) return;
       secondary.push([col, v]);
     });
-
     if (secondary.length > 0) {
       html += '<details class="card-more"><summary>자세히 보기</summary><dl>';
       secondary.forEach(([k, v]) => {
@@ -1105,14 +1120,22 @@ function addResultMessage(data) {
 
     html += "</div>";
   });
-  html += "</div>";
+  return html;
+}
 
-  // 표 뷰 (숨김 상태)
-  html += `<div class="result-wrap hidden" id="${uid}-table">`;
-  html += '<table class="result-table"><thead><tr>';
-  data.columns.forEach((col) => { html += `<th>${esc(col)}</th>`; });
+// Build table HTML for a given row set + sort state
+function renderTableHtml(data, rows, terms, sort) {
+  const hi = (v) => highlight(v, terms);
+  let html = '<table class="result-table"><thead><tr>';
+  data.columns.forEach((col) => {
+    const isSorted = sort && sort.col === col;
+    const dir = isSorted ? sort.dir : null;
+    const ariaSort = isSorted ? (dir === "desc" ? "descending" : "ascending") : "none";
+    const indicator = isSorted ? (dir === "desc" ? " ▼" : " ▲") : "";
+    html += `<th class="sortable${isSorted ? " sorted" : ""}" aria-sort="${ariaSort}" data-sort-col="${esc(col)}">${esc(col)}${indicator}</th>`;
+  });
   html += "</tr></thead><tbody>";
-  data.rows.forEach((row) => {
+  rows.forEach((row) => {
     html += "<tr>";
     data.columns.forEach((col, idx) => {
       const val = row[col] || row[`col_${idx}`] || "";
@@ -1120,7 +1143,55 @@ function addResultMessage(data) {
     });
     html += "</tr>";
   });
-  html += "</tbody></table></div>";
+  html += "</tbody></table>";
+  return html;
+}
+
+// Sortable card-view columns (subset — only columns that make sense)
+const CARD_SORT_COLUMNS = [
+  { value: "", label: "원본 순서" },
+  { value: "규격번호", label: "규격번호" },
+  { value: "규격서명", label: "규격서명" },
+  { value: "제정일자", label: "제정일자" },
+  { value: "최종개정일자", label: "최종개정일자" },
+  { value: "제정기관", label: "제정기관" },
+];
+
+function addResultMessage(data) {
+  const uid = "r" + Date.now() + Math.floor(Math.random() * 1000);
+  resultDataByUid.set(uid, { data, sort: null });
+  const terms = deriveHighlightTerms(data);
+  let html = "";
+
+  // 검색 파라미터 태그
+  if (data.searchParams && Object.keys(data.searchParams).length > 0) {
+    html += '<div class="search-params">';
+    for (const [k, v] of Object.entries(data.searchParams)) {
+      html += `<span class="param-tag">${esc(k)}: ${esc(v)}</span>`;
+    }
+    html += "</div>";
+  }
+
+  // 툴바 (카운트 + 정렬 + 뷰 토글 + CSV)
+  html += '<div class="result-toolbar" role="toolbar" aria-label="결과 뷰 옵션">';
+  html += `<span class="chip chip-count">🔍 총 <strong>${data.totalCount}</strong>건</span>`;
+  html += `<span class="chip">${data.rows.length}건 표시</span>`;
+  html += `<label class="sort-control"><span class="sort-label">정렬</span>`;
+  html += `<select class="sort-select" data-sort-select="${uid}" aria-label="카드 정렬">`;
+  CARD_SORT_COLUMNS.forEach((opt) => {
+    if (opt.value !== "" && !data.columns.includes(opt.value)) return;
+    html += `<option value="${esc(opt.value)}">${esc(opt.label)}</option>`;
+  });
+  html += `</select>`;
+  html += `<button type="button" class="sort-dir" data-sort-dir="${uid}" aria-label="오름차순/내림차순 전환" title="오름차순">▲</button>`;
+  html += `</label>`;
+  html += `<button class="view-toggle" type="button" data-toggle-view="${uid}" aria-pressed="false">📊 표로 보기</button>`;
+  html += `<button class="view-toggle" type="button" data-download-csv="${uid}" title="CSV로 다운로드">⬇ CSV</button>`;
+  html += "</div>";
+
+  // Card + table views
+  html += `<div class="cards" id="${uid}-cards">${renderCardsHtml(data, data.rows, terms)}</div>`;
+  html += `<div class="result-wrap hidden" id="${uid}-table">${renderTableHtml(data, data.rows, terms, null)}</div>`;
 
   // 스크린샷 (신규 결과 한정 — 복원 시에는 stale URL이라 생략)
   if (!data.__restored) {
@@ -1131,6 +1202,28 @@ function addResultMessage(data) {
   addBotMessage(html, { skipPersist: true });
   // Persist structured payload so we can re-render after reload without re-fetching
   pushEvent({ type: "result", data: serializableResult(data) });
+}
+
+// Re-render card and table bodies for a uid based on its stored sort state
+function applySort(uid) {
+  const entry = resultDataByUid.get(uid);
+  if (!entry) return;
+  const { data, sort } = entry;
+  const terms = deriveHighlightTerms(data);
+  const sortedRows = sort && sort.col ? sortRows(data.rows, sort.col, sort.dir) : data.rows;
+  const cardsEl = document.getElementById(uid + "-cards");
+  const tableWrap = document.getElementById(uid + "-table");
+  if (cardsEl) cardsEl.innerHTML = renderCardsHtml(data, sortedRows, terms);
+  if (tableWrap) tableWrap.innerHTML = renderTableHtml(data, sortedRows, terms, sort);
+  // Sync the card-sort controls so they reflect the active state
+  const sel = document.querySelector(`[data-sort-select="${uid}"]`);
+  if (sel) sel.value = sort ? sort.col : "";
+  const dirBtn = document.querySelector(`[data-sort-dir="${uid}"]`);
+  if (dirBtn) {
+    const dir = sort ? sort.dir : "asc";
+    dirBtn.textContent = dir === "desc" ? "▼" : "▲";
+    dirBtn.title = dir === "desc" ? "내림차순" : "오름차순";
+  }
 }
 
 // Strip non-essential fields before storing
@@ -1189,15 +1282,20 @@ async function handleClickDelegated(e) {
   const csvBtn = e.target.closest("[data-download-csv]");
   if (csvBtn) {
     const uid = csvBtn.dataset.downloadCsv;
-    const data = resultDataByUid.get(uid);
-    if (!data) {
+    const entry = resultDataByUid.get(uid);
+    if (!entry) {
       toast("다운로드할 결과가 없습니다", "error");
       return;
     }
     try {
+      // Export in the currently-sorted order
+      const rows = entry.sort && entry.sort.col
+        ? sortRows(entry.data.rows, entry.sort.col, entry.sort.dir)
+        : entry.data.rows;
+      const exportData = { columns: entry.data.columns, rows };
       const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15);
-      downloadCsv(data, `kdsis_${ts}.csv`);
-      toast(`CSV 저장: ${data.rows.length}건`, "success");
+      downloadCsv(exportData, `kdsis_${ts}.csv`);
+      toast(`CSV 저장: ${rows.length}건`, "success");
     } catch (err) {
       toast("CSV 생성 실패: " + err.message, "error");
     }
@@ -1212,8 +1310,52 @@ async function handleClickDelegated(e) {
     dbgBtn.textContent = shown ? "📸 캡처 숨기기" : "📸 검색 화면 캡처 보기";
     return;
   }
+  // Table header click → toggle sort on that column
+  const sortTh = e.target.closest("th[data-sort-col]");
+  if (sortTh) {
+    const col = sortTh.dataset.sortCol;
+    // Find the owning result uid by walking up to the nearest [id$='-table']
+    const wrap = sortTh.closest("[id$='-table']");
+    if (!wrap) return;
+    const uid = wrap.id.replace(/-table$/, "");
+    const entry = resultDataByUid.get(uid);
+    if (!entry) return;
+    let next;
+    if (!entry.sort || entry.sort.col !== col) next = { col, dir: "asc" };
+    else if (entry.sort.dir === "asc") next = { col, dir: "desc" };
+    else next = null; // third click clears sort
+    entry.sort = next;
+    applySort(uid);
+    return;
+  }
+  // Card view sort direction toggle
+  const dirBtn = e.target.closest("[data-sort-dir]");
+  if (dirBtn) {
+    const uid = dirBtn.dataset.sortDir;
+    const entry = resultDataByUid.get(uid);
+    if (!entry || !entry.sort) {
+      // Can't flip direction with no column selected — prompt user
+      toast("먼저 정렬 기준을 선택하세요", "info");
+      return;
+    }
+    entry.sort = { col: entry.sort.col, dir: entry.sort.dir === "asc" ? "desc" : "asc" };
+    applySort(uid);
+    return;
+  }
 }
 messages.addEventListener("click", handleClickDelegated);
+
+// Card sort select is a change event, not click
+messages.addEventListener("change", (e) => {
+  const sel = e.target.closest("[data-sort-select]");
+  if (!sel) return;
+  const uid = sel.dataset.sortSelect;
+  const entry = resultDataByUid.get(uid);
+  if (!entry) return;
+  const col = sel.value;
+  entry.sort = col ? { col, dir: (entry.sort && entry.sort.dir) || "asc" } : null;
+  applySort(uid);
+});
 
 let typingCounter = 0;
 function skeletonCard() {
