@@ -224,6 +224,10 @@
     .msg-action:hover{border-color:var(--primary-light);background:var(--surface-alt);color:var(--primary)}
     .msg-action:disabled{opacity:.5;cursor:not-allowed}
 
+    /* Search term highlight */
+    mark{background:var(--primary-tint-strong);color:var(--primary);padding:1px 3px;border-radius:3px;font-weight:inherit;font-style:inherit}
+    [data-theme="dark"] mark{color:#93C5FD}
+
     /* Skeleton loader — preview the result shape while loading */
     .skeleton-cards{display:grid;gap:.625rem;margin-top:.75rem}
     .skeleton-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:.875rem 1rem}
@@ -825,6 +829,8 @@ const PRIMARY_FIELDS = new Set([
 
 function addResultMessage(data) {
   const uid = "r" + Date.now() + Math.floor(Math.random() * 1000);
+  const terms = deriveHighlightTerms(data);
+  const hi = (v) => highlight(v, terms);
   let html = "";
 
   // 검색 파라미터 태그
@@ -865,13 +871,13 @@ function addResultMessage(data) {
     if (status) html += `<span class="status-badge ${statusClass(status)}">${esc(status)}</span>`;
     html += "</div>";
 
-    html += `<div class="card-title">${esc(title)}</div>`;
+    html += `<div class="card-title">${hi(title)}</div>`;
 
     html += '<div class="card-meta">';
-    if (org) html += `<span class="mi">🏛️ <strong>${esc(org)}</strong></span>`;
-    if (eqp) html += `<span class="mi">⚙️ ${esc(eqp)}</span>`;
-    if (part) html += `<span class="mi">📦 <span class="mono" style="font-size:.75rem">${esc(part)}</span></span>`;
-    if (nsn) html += `<span class="mi">🔖 NSN ${esc(nsn)}</span>`;
+    if (org) html += `<span class="mi">🏛️ <strong>${hi(org)}</strong></span>`;
+    if (eqp) html += `<span class="mi">⚙️ ${hi(eqp)}</span>`;
+    if (part) html += `<span class="mi">📦 <span class="mono" style="font-size:.75rem">${hi(part)}</span></span>`;
+    if (nsn) html += `<span class="mi">🔖 NSN ${hi(nsn)}</span>`;
     html += "</div>";
 
     if (!isEmpty(enactDate) || !isEmpty(revDate)) {
@@ -894,7 +900,7 @@ function addResultMessage(data) {
     if (secondary.length > 0) {
       html += '<details class="card-more"><summary>자세히 보기</summary><dl>';
       secondary.forEach(([k, v]) => {
-        html += `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`;
+        html += `<dt>${esc(k)}</dt><dd>${hi(v)}</dd>`;
       });
       html += "</dl></details>";
     }
@@ -912,7 +918,7 @@ function addResultMessage(data) {
     html += "<tr>";
     data.columns.forEach((col, idx) => {
       const val = row[col] || row[`col_${idx}`] || "";
-      html += `<td title="${esc(val)}">${esc(val)}</td>`;
+      html += `<td title="${esc(val)}">${hi(val)}</td>`;
     });
     html += "</tr>";
   });
@@ -1045,6 +1051,42 @@ function esc(str) {
   const d = document.createElement("div");
   d.appendChild(document.createTextNode(String(str)));
   return d.innerHTML;
+}
+
+// Regex-escape for turning user strings into safe patterns
+function escRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+// Escape HTML first, then wrap matches in <mark>. Terms are matched
+// longest-first so "KDS 1005" wraps as a whole before "KDS" and "1005".
+function highlight(raw, terms) {
+  const escaped = esc(raw);
+  if (!terms || !terms.length || !raw) return escaped;
+  const cleaned = [...new Set(terms.map((t) => String(t || "").trim()).filter((t) => t.length >= 1))]
+    .sort((a, b) => b.length - a.length)
+    .map(escRegex);
+  if (!cleaned.length) return escaped;
+  try {
+    const re = new RegExp("(" + cleaned.join("|") + ")", "gi");
+    return escaped.replace(re, "<mark>$1</mark>");
+  } catch {
+    return escaped;
+  }
+}
+// Derive terms from searchParams + the raw query text (if natural language)
+function deriveHighlightTerms(data) {
+  const terms = [];
+  if (data && data.searchParams) {
+    for (const v of Object.values(data.searchParams)) {
+      if (v != null && String(v).trim()) terms.push(String(v).trim());
+    }
+  }
+  if (lastSearch && lastSearch.kind === "query" && lastSearch.text) {
+    lastSearch.text.split(/\s+/).forEach((tok) => {
+      if (tok.length >= 2) terms.push(tok);
+    });
+  }
+  return terms;
 }
 
 // ── Session restore (replay events without persisting) ──
