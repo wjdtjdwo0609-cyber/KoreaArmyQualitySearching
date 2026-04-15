@@ -3,22 +3,70 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
   <title>국방 AI 어시스턴트 — KDSIS 실시간 검색</title>
+  <script>
+    // No-flash theme init: apply BEFORE first paint
+    (function () {
+      try {
+        var stored = localStorage.getItem("kdsis-theme");
+        var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var theme = stored || (prefersDark ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    })();
+  </script>
   <style>
     :root {
+      /* Brand */
       --primary:#2563EB;--primary-light:#3B82F6;--primary-dark:#1D4ED8;
       --green:#10B981;--green-dark:#059669;
+      --error:#EF4444;--warning:#F59E0B;
+      /* Light surfaces (default) */
       --bg:#F7F7F8;--surface:#FFF;--surface-alt:#F0F0F1;--surface-hover:#E8E8EA;
       --text:#1A1A2E;--muted:#6B7280;--inverse:#FFF;--border:#E5E7EB;
-      --error:#EF4444;--warning:#F59E0B;
+      /* Translucent overlays — must adapt per theme */
+      --primary-tint:rgba(37,99,235,.08);
+      --primary-tint-strong:rgba(37,99,235,.10);
+      --primary-row:rgba(37,99,235,.04);
+      --green-tint:rgba(16,185,129,.10);
+      --green-badge:rgba(16,185,129,.12);
+      --warning-tint:rgba(245,158,11,.12);
+      --error-tint:rgba(239,68,68,.06);
+      --error-tint-strong:rgba(239,68,68,.12);
+      --error-border:rgba(239,68,68,.15);
+      --neutral-tint:rgba(107,114,128,.12);
+      /* Type & shape */
       --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;
       --mono:"SF Mono","Consolas","Noto Sans KR",monospace;
       --r-sm:8px;--r-md:12px;--r-lg:16px;--r-full:9999px;
       --sh-sm:0 1px 2px rgba(0,0,0,.05);--sh-md:0 4px 12px rgba(0,0,0,.08);
+      color-scheme:light;
+    }
+    [data-theme="dark"] {
+      --bg:#0B1120;--surface:#111827;--surface-alt:#1F2937;--surface-hover:#374151;
+      --text:#F1F5F9;--muted:#9CA3AF;--inverse:#FFF;--border:#1F2937;
+      --primary:#3B82F6;--primary-light:#60A5FA;--primary-dark:#2563EB;
+      --green-dark:#34D399;
+      --primary-tint:rgba(59,130,246,.16);
+      --primary-tint-strong:rgba(59,130,246,.22);
+      --primary-row:rgba(59,130,246,.08);
+      --green-tint:rgba(16,185,129,.16);
+      --green-badge:rgba(16,185,129,.18);
+      --warning-tint:rgba(245,158,11,.18);
+      --error-tint:rgba(239,68,68,.12);
+      --error-tint-strong:rgba(239,68,68,.20);
+      --error-border:rgba(239,68,68,.25);
+      --neutral-tint:rgba(156,163,175,.18);
+      --sh-sm:0 1px 2px rgba(0,0,0,.4);--sh-md:0 6px 16px rgba(0,0,0,.45);
+      color-scheme:dark;
     }
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     html{font-size:16px;-webkit-font-smoothing:antialiased}
-    body{font-family:var(--font);font-size:.9375rem;color:var(--text);background:var(--bg);height:100dvh;min-height:100vh;overflow:hidden;line-height:1.6}
+    body{font-family:var(--font);font-size:.9375rem;color:var(--text);background:var(--bg);height:100dvh;min-height:100vh;overflow:hidden;line-height:1.6;transition:background-color .2s ease,color .2s ease}
+    .header,.card,.bubble,.input-form,.reset-btn,.icon-btn,.view-toggle,.prompt-card,.chip,.spec-no,.spec-kind,.status-badge,.param-tag,.result-table{transition:background-color .2s ease,border-color .2s ease,color .2s ease}
     ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border);border-radius:var(--r-full)}
 
     /* Focus — WCAG 2.4.7 */
@@ -39,6 +87,10 @@
     .reset-btn{flex-shrink:0;display:inline-flex;align-items:center;gap:.25rem;font-size:.8125rem;font-weight:500;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:.375rem .625rem;cursor:pointer;font-family:var(--font);transition:all .15s}
     .reset-btn:hover{color:var(--primary);border-color:var(--primary-light);background:var(--surface-alt)}
     .reset-btn:disabled{opacity:.5;cursor:not-allowed}
+    .icon-btn{flex-shrink:0;width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--muted);cursor:pointer;font-family:var(--font);font-size:1rem;transition:all .15s;line-height:1}
+    .icon-btn:hover{color:var(--primary);border-color:var(--primary-light);background:var(--surface-alt)}
+    .icon-btn .theme-icon{transition:transform .3s ease}
+    .icon-btn:hover .theme-icon{transform:rotate(-15deg) scale(1.1)}
 
     .messages{flex:1;overflow-y:auto;padding:1.5rem 1rem;scroll-behavior:smooth}
 
@@ -59,7 +111,7 @@
     .search-status{display:flex;align-items:center;gap:.5rem;font-size:.8125rem;color:var(--primary);margin-bottom:.75rem;font-weight:500}
     .search-status .spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
     .search-params{display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.75rem}
-    .param-tag{font-size:.75rem;padding:3px 10px;background:rgba(37,99,235,.08);color:var(--primary);border-radius:var(--r-full);font-weight:500}
+    .param-tag{font-size:.75rem;padding:3px 10px;background:var(--primary-tint);color:var(--primary);border-radius:var(--r-full);font-weight:500}
 
     /* Result — card + table hybrid */
     .result-wrap{width:100%;margin:.75rem 0}
@@ -67,7 +119,7 @@
     .result-intro strong{color:var(--primary)}
     .result-toolbar{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap}
     .chip{font-size:.75rem;padding:4px 10px;border-radius:var(--r-full);font-weight:500;background:var(--surface-alt);color:var(--text)}
-    .chip-count{background:rgba(37,99,235,.1);color:var(--primary)}
+    .chip-count{background:var(--primary-tint-strong);color:var(--primary)}
     .view-toggle{margin-left:auto;font-size:.75rem;padding:4px 10px;border:1px solid var(--border);background:var(--surface);border-radius:var(--r-sm);cursor:pointer;color:var(--muted);font-family:var(--font);transition:all .15s}
     .view-toggle:hover{background:var(--surface-alt);color:var(--text)}
 
@@ -76,13 +128,13 @@
     .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:.875rem 1rem;transition:all .15s}
     .card:hover{border-color:var(--primary-light);box-shadow:var(--sh-sm)}
     .card-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.375rem;flex-wrap:wrap}
-    .spec-no{font-family:var(--mono);font-size:.8125rem;font-weight:600;color:var(--primary);background:rgba(37,99,235,.08);padding:3px 8px;border-radius:var(--r-sm)}
+    .spec-no{font-family:var(--mono);font-size:.8125rem;font-weight:600;color:var(--primary);background:var(--primary-tint);padding:3px 8px;border-radius:var(--r-sm)}
     .spec-kind{font-size:.75rem;color:var(--muted);padding:3px 8px;background:var(--surface-alt);border-radius:var(--r-sm)}
     .status-badge{font-size:.75rem;font-weight:600;padding:3px 10px;border-radius:var(--r-full);margin-left:auto}
-    .status-active{background:rgba(16,185,129,.12);color:var(--green-dark)}
-    .status-inactive{background:rgba(107,114,128,.12);color:var(--muted)}
-    .status-transition{background:rgba(245,158,11,.12);color:var(--warning)}
-    .status-abolished{background:rgba(239,68,68,.12);color:var(--error)}
+    .status-active{background:var(--green-badge);color:var(--green-dark)}
+    .status-inactive{background:var(--neutral-tint);color:var(--muted)}
+    .status-transition{background:var(--warning-tint);color:var(--warning)}
+    .status-abolished{background:var(--error-tint-strong);color:var(--error)}
     .card-title{font-size:.9375rem;font-weight:600;color:var(--text);margin-bottom:.5rem;line-height:1.4}
     .card-meta{display:flex;flex-wrap:wrap;gap:.375rem .875rem;font-size:.8125rem;color:var(--muted);margin-bottom:.375rem}
     .card-meta .mi{display:inline-flex;align-items:center;gap:.25rem}
@@ -105,7 +157,7 @@
     .result-table th{padding:.625rem .75rem;text-align:left;font-weight:600;font-size:.75rem;color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--border)}
     .result-table td{padding:.625rem .75rem;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis}
     .result-table tbody tr:last-child td{border-bottom:none}
-    .result-table tbody tr:hover{background:rgba(37,99,235,.04)}
+    .result-table tbody tr:hover{background:var(--primary-row)}
     .result-count{font-size:.8125rem;color:var(--muted);margin-top:.5rem}
     .hidden{display:none !important}
 
@@ -115,14 +167,14 @@
     /* Empty / error */
     .empty-state{text-align:center;padding:1.5rem;color:var(--muted)}
     .empty-state-icon{font-size:2rem;margin-bottom:.75rem;opacity:.6}
-    .error-msg{color:var(--error);font-size:.8125rem;padding:.5rem .75rem;background:rgba(239,68,68,.06);border-radius:var(--r-sm);border:1px solid rgba(239,68,68,.15)}
+    .error-msg{color:var(--error);font-size:.8125rem;padding:.5rem .75rem;background:var(--error-tint);border-radius:var(--r-sm);border:1px solid var(--error-border)}
 
     /* Welcome */
     .welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;padding:2rem;animation:fadeUp .5s ease-out}
     .welcome-icon{font-size:3.5rem;margin-bottom:1rem;animation:pulse 2s ease-in-out infinite}
     .welcome h3{font-size:1.5rem;font-weight:700;margin-bottom:.375rem;background:linear-gradient(135deg,var(--primary),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
     .welcome p{color:var(--muted);margin-bottom:1.5rem;max-width:480px}
-    .welcome .badge{font-size:.75rem;padding:5px 14px;background:rgba(16,185,129,.1);color:var(--green-dark);border-radius:var(--r-full);font-weight:600;margin-bottom:1rem}
+    .welcome .badge{font-size:.75rem;padding:5px 14px;background:var(--green-tint);color:var(--green-dark);border-radius:var(--r-full);font-weight:600;margin-bottom:1rem}
     .prompts{display:grid;grid-template-columns:repeat(2,1fr);gap:.75rem;width:100%;max-width:640px}
     .prompt-card{display:flex;align-items:center;gap:.625rem;padding:.875rem 1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);cursor:pointer;font-family:var(--font);font-size:.875rem;color:var(--text);text-align:left;transition:all .15s;box-shadow:var(--sh-sm)}
     .prompt-card:hover{transform:translateY(-2px);box-shadow:var(--sh-md);border-color:var(--primary-light)}
@@ -133,7 +185,7 @@
     /* Input */
     .input-area{padding:.75rem 1.5rem 1.25rem;background:var(--bg);max-width:calc(800px + 4rem);width:100%;margin:0 auto}
     .input-form{display:flex;align-items:flex-end;gap:.5rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:.625rem .625rem .625rem 1rem;box-shadow:var(--sh-md);transition:border-color .15s,box-shadow .15s}
-    .input-form:focus-within{border-color:var(--primary-light);box-shadow:var(--sh-md),0 0 0 3px rgba(37,99,235,.1)}
+    .input-form:focus-within{border-color:var(--primary-light);box-shadow:var(--sh-md),0 0 0 3px var(--primary-tint-strong)}
     .input-form textarea{flex:1;border:none;outline:none;resize:none;font-family:var(--font);font-size:.9375rem;color:var(--text);background:transparent;line-height:1.5;max-height:120px;padding:.375rem 0;min-height:1.5rem}
     .input-form textarea::placeholder{color:var(--muted)}
     .send-btn{flex-shrink:0;width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:var(--primary);border:none;border-radius:var(--r-sm);color:var(--inverse);cursor:pointer;font-size:1.0625rem;transition:all .15s}
@@ -188,6 +240,9 @@
     <header class="header" role="banner">
       <h1>🎖️ 국방 AI 어시스턴트 — KDSIS 실시간 검색</h1>
       <span class="status" id="status" role="status" aria-live="polite">● 온라인</span>
+      <button class="icon-btn" id="themeBtn" type="button" aria-label="테마 변경" aria-pressed="false" title="라이트/다크 전환 (Shift+D)">
+        <span class="theme-icon" aria-hidden="true">🌙</span>
+      </button>
       <button class="reset-btn" id="resetBtn" type="button" aria-label="새 대화 시작" title="새 대화 시작 (Ctrl+K)">
         <span aria-hidden="true">＋</span><span>새 대화</span>
       </button>
@@ -248,7 +303,7 @@
         <textarea id="input" placeholder="검색할 내용을 입력하세요 (예: 구경50미리)" rows="1" maxlength="500" aria-label="검색어" aria-describedby="input-hint"></textarea>
         <button class="send-btn" type="submit" id="sendBtn" disabled aria-label="전송">▲</button>
       </form>
-      <p class="hint" id="input-hint">Enter로 전송 · Shift+Enter로 줄바꿈 · Ctrl+K 새 대화 · KDSIS 실시간 조회 (데이터 미저장)</p>
+      <p class="hint" id="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+K 새 대화 · Shift+D 테마 · KDSIS 실시간 조회 (데이터 미저장)</p>
     </div>
   </div>
 
@@ -260,7 +315,35 @@ const sendBtn = document.getElementById("sendBtn");
 const statusEl = document.getElementById("status");
 const welcome = document.getElementById("welcome");
 const resetBtn = document.getElementById("resetBtn");
+const themeBtn = document.getElementById("themeBtn");
 let busy = false;
+
+// ── Theme ──
+const THEME_KEY = "kdsis-theme";
+const themeIcon = themeBtn.querySelector(".theme-icon");
+function applyTheme(theme, persist) {
+  document.documentElement.setAttribute("data-theme", theme);
+  if (themeIcon) themeIcon.textContent = theme === "dark" ? "☀️" : "🌙";
+  themeBtn.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
+  themeBtn.setAttribute("aria-label", theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환");
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, theme); } catch {}
+  }
+}
+function currentTheme() {
+  return document.documentElement.getAttribute("data-theme") || "light";
+}
+applyTheme(currentTheme(), false); // sync icon with no-flash result
+themeBtn.addEventListener("click", () => {
+  applyTheme(currentTheme() === "dark" ? "light" : "dark", true);
+});
+// Follow system changes only if user hasn't set a preference
+try {
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  mq.addEventListener("change", (e) => {
+    if (!localStorage.getItem(THEME_KEY)) applyTheme(e.matches ? "dark" : "light", false);
+  });
+} catch {}
 
 // ── New chat / reset ──
 function resetChat() {
@@ -277,11 +360,17 @@ function resetChat() {
 }
 resetBtn.addEventListener("click", resetChat);
 
-// Ctrl/Cmd+K → new chat
+// Global shortcuts: Ctrl/Cmd+K (new chat), Shift+D (theme)
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
     e.preventDefault();
     resetChat();
+    return;
+  }
+  // Shift+D — only when not typing
+  if (e.shiftKey && e.key === "D" && document.activeElement !== input) {
+    e.preventDefault();
+    applyTheme(currentTheme() === "dark" ? "light" : "dark", true);
   }
 });
 
