@@ -19,6 +19,13 @@
 const express = require("express");
 const { chromium } = require("playwright");
 const path = require("path");
+const {
+  cacheKey,
+  createCache,
+  createSerialQueue,
+  withTimeout,
+  isTransient,
+} = require("./lib/runtime");
 
 const app = express();
 app.use(express.json());
@@ -75,44 +82,13 @@ async function closeBrowser() {
 // contexts in parallel, but KDSIS' WebSquare grid occasionally races when
 // two searches land in the same tick, and memory blows up fast. Queueing
 // is fine because repeat callers hit the cache anyway.
-let _chain = Promise.resolve();
-function runSerial(fn) {
-  const next = _chain.then(fn, fn);
-  _chain = next.catch(() => {}); // absorb rejection so the chain keeps moving
-  return next;
-}
+const runSerial = createSerialQueue();
 
-// TTL cache with in-flight dedup. Non-error results (even empty) get cached
-// by canonical params key.
+// TTL+LRU cache with in-flight dedup. Non-error results (even empty) get
+// cached by canonical params key.
 const CACHE_TTL_MS = Number(process.env.KDSIS_CACHE_TTL_MS || 60_000);
-const CACHE_MAX = 64;
-const _cache = new Map();      // key → { data, expiresAt }
+const cache = createCache({ ttlMs: CACHE_TTL_MS, max: 64 });
 const _inFlight = new Map();   // key → Promise<results>
-
-function cacheKey(params) {
-  const keys = Object.keys(params || {}).sort();
-  return keys.map((k) => `${k}=${params[k]}`).join("&");
-}
-function cacheGet(key) {
-  const e = _cache.get(key);
-  if (!e) return null;
-  if (e.expiresAt < Date.now()) {
-    _cache.delete(key);
-    return null;
-  }
-  // LRU touch
-  _cache.delete(key);
-  _cache.set(key, e);
-  return e.data;
-}
-function cacheSet(key, data) {
-  if (_cache.has(key)) _cache.delete(key);
-  _cache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
-  while (_cache.size > CACHE_MAX) {
-    const first = _cache.keys().next().value;
-    _cache.delete(first);
-  }
-}
 
 // ── AI 설정 ──────────────────────────────────────────────
 const AI_PROVIDER = (process.env.AI_PROVIDER || "claude").toLowerCase();
@@ -308,7 +284,7 @@ async function parseQuery(text) {
 // identical concurrent requests don't both run Playwright.
 async function searchKDSIS(params) {
   const key = cacheKey(params);
-  const cached = cacheGet(key);
+  const cached = cache.get(key);
   if (cached) {
     console.log(`[cache] hit: ${key || "(empty key)"}`);
     return { ...cached, __cached: true };
@@ -321,7 +297,7 @@ async function searchKDSIS(params) {
     .then((results) => {
       // Cache non-error results (including zero-row) so repeat empty searches
       // also go instant. Errors stay uncached so retries actually retry.
-      if (results && !results.error) cacheSet(key, results);
+      if (results && !results.error) cache.set(key, results);
       return results;
     })
     .finally(() => _inFlight.delete(key));
@@ -334,21 +310,6 @@ async function searchKDSIS(params) {
 // doubling worst-case latency for the happy path.
 const SEARCH_TIMEOUT_MS = Number(process.env.KDSIS_SEARCH_TIMEOUT_MS || 45_000);
 const SEARCH_RETRIES = 1;
-
-function withTimeout(promise, ms, label) {
-  let t;
-  return Promise.race([
-    promise,
-    new Promise((_, rej) => {
-      t = setTimeout(() => rej(new Error(`${label} timeout after ${ms}ms`)), ms);
-    }),
-  ]).finally(() => clearTimeout(t));
-}
-function isTransient(msg) {
-  return /timeout|navigation|disconnect|net::|Target closed|frame.*detached|has been closed/i.test(
-    String(msg || "")
-  );
-}
 
 async function _runSearch(params) {
   let lastError = null;
@@ -1186,8 +1147,8 @@ app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     browserAlive: !!(_browser && _browser.isConnected()),
-    cacheSize: _cache.size,
-    cacheTtlMs: CACHE_TTL_MS,
+    cacheSize: cache.size,
+    cacheTtlMs: cache.ttlMs,
     inFlight: _inFlight.size,
     aiProvider: AI_PROVIDER,
     uptimeSec: Math.round(process.uptime()),

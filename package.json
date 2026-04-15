@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node -r dotenv/config server.js",
     "start:no-ai": "node server.js",
-    "setup": "npx playwright install chromium"
+    "setup": "npx playwright install chromium",
+    "test": "node --test test/*.test.js",
+    "lint:syntax": "node --check server.js && node --check lib/runtime.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
