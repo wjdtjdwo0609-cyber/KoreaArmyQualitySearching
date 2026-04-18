@@ -28,6 +28,81 @@ const PORT = process.env.PORT || 3000;
 const KDSIS_URL =
   "https://kdsis.dapa.go.kr/cs/ctlgSpprtMgt/cagecd9250Mgt/gukminPopup.do?tabIdx=0&popYn=Y";
 
+// ── Playwright singleton pool ───────────────────────────
+// Reuses a single browser instance across requests so we don't pay the
+// 15-30s launch cost on every search. The instance is lazily created and
+// auto-refreshed after MAX_REUSE pages (guards against memory leaks).
+let _browser = null;
+let _browserUseCount = 0;
+const MAX_BROWSER_REUSE = 20;
+
+async function getBrowser() {
+  if (_browser && _browser.isConnected() && _browserUseCount < MAX_BROWSER_REUSE) {
+    _browserUseCount++;
+    return _browser;
+  }
+  if (_browser) {
+    try { await _browser.close(); } catch {}
+  }
+  _browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+  });
+  _browserUseCount = 1;
+  return _browser;
+}
+
+// ── Request concurrency guard ────────────────────────────
+// KDSIS is a single-page WebSquare app; running two searches in parallel
+// on the same page trashes state. Queue requests so only one runs at a time.
+let _searchQueue = Promise.resolve();
+function enqueueSearch(fn) {
+  _searchQueue = _searchQueue.then(fn, fn);
+  return _searchQueue;
+}
+
+// ── Simple TTL cache ─────────────────────────────────────
+// Keyed by stringified search params. 5-minute TTL. Max 50 entries.
+const CACHE_TTL = 5 * 60 * 1000;
+const CACHE_MAX = 50;
+const _cache = new Map();
+
+function cacheKey(params) {
+  return JSON.stringify(
+    Object.entries(params).sort(([a], [b]) => a.localeCompare(b))
+  );
+}
+function cacheGet(params) {
+  const k = cacheKey(params);
+  const entry = _cache.get(k);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL) {
+    _cache.delete(k);
+    return null;
+  }
+  console.log("[캐시] 히트:", k.slice(0, 60));
+  return entry.value;
+}
+function cacheSet(params, value) {
+  const k = cacheKey(params);
+  // Evict oldest if at capacity
+  if (_cache.size >= CACHE_MAX) {
+    const oldest = _cache.keys().next().value;
+    _cache.delete(oldest);
+  }
+  _cache.set(k, { value, ts: Date.now() });
+}
+
+// ── AI request timeout wrapper ───────────────────────────
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} 타임아웃 (${ms}ms)`)), ms)
+    ),
+  ]);
+}
+
 // ── AI 설정 ──────────────────────────────────────────────
 const AI_PROVIDER = (process.env.AI_PROVIDER || "claude").toLowerCase();
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -199,10 +274,8 @@ async function parseQuery(text) {
   if (useAI) {
     try {
       console.log(`[AI] ${AI_PROVIDER} 파싱 중...`);
-      const params =
-        AI_PROVIDER === "claude"
-          ? await parseWithClaude(text)
-          : await parseWithGemini(text);
+      const parseFn = AI_PROVIDER === "claude" ? parseWithClaude : parseWithGemini;
+      const params = await withTimeout(parseFn(text), 10000, `AI(${AI_PROVIDER})`);
       console.log(`[AI] 결과:`, params);
 
       if (params && Object.keys(params).length > 0) return params;
@@ -218,14 +291,10 @@ async function parseQuery(text) {
 
 // ── Playwright로 KDSIS 검색 실행 ─────────────────────────
 async function searchKDSIS(params) {
-  let browser;
+  let context;
   try {
-    browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-
-    const context = await browser.newContext({
+    const browser = await getBrowser();
+    context = await browser.newContext({
       locale: "ko-KR",
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -449,7 +518,7 @@ async function searchKDSIS(params) {
     console.error("[KDSIS] 검색 에러:", error.message);
     return { rows: [], columns: [], totalCount: 0, error: error.message };
   } finally {
-    if (browser) await browser.close();
+    if (context) await context.close().catch(() => {});
   }
 }
 
@@ -460,7 +529,7 @@ async function searchKDSIS(params) {
 //   3) 검색 후 페이지에 결과가 있는가 (DOM 스캔)
 //   4) 카운트/tbody 셀렉터가 실제 DOM과 일치하는가
 async function diagnosticSearch(params) {
-  let browser;
+  let context;
   const consoleErrors = [];
   const diag = {
     params,
@@ -483,11 +552,8 @@ async function diagnosticSearch(params) {
   };
 
   try {
-    browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-    const context = await browser.newContext({
+    const browser = await getBrowser();
+    context = await browser.newContext({
       locale: "ko-KR",
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -711,7 +777,7 @@ async function diagnosticSearch(params) {
   } catch (err) {
     diag.error = err.message;
   } finally {
-    if (browser) await browser.close();
+    if (context) await context.close().catch(() => {});
   }
 
   return diag;
@@ -760,27 +826,42 @@ app.post("/api/search", async (req, res) => {
   console.log(`\n${"═".repeat(50)}`);
   console.log(`[요청] "${query}"`);
 
-  // 1) 자연어 → 검색 파라미터 (AI 또는 규칙 기반)
-  const params = await parseQuery(query);
-  console.log("[파싱]", params);
+  try {
+    // 1) 자연어 → 검색 파라미터 (AI 또는 규칙 기반)
+    const params = await parseQuery(query);
+    console.log("[파싱]", params);
 
-  if (Object.keys(params).length === 0) {
-    return res.json({
-      message: "검색 조건을 파악할 수 없습니다. 규격번호, 장비명, 부품명 등을 포함해 주세요.",
-      type: "empty",
-      searchParams: {},
+    if (Object.keys(params).length === 0) {
+      return res.json({
+        message: "검색 조건을 파악할 수 없습니다. 규격번호, 장비명, 부품명 등을 포함해 주세요.",
+        type: "empty",
+        searchParams: {},
+      });
+    }
+
+    // 2) 캐시 확인
+    const cached = cacheGet(params);
+    if (cached) {
+      console.log(`[결과] 캐시 히트: ${cached.rows?.length || 0}건`);
+      return res.json(cached);
+    }
+
+    // 3) KDSIS 자동 검색 (큐 통과)
+    const response = await enqueueSearch(async () => {
+      const results = await searchKDSIS(params);
+      return formatResultsForChat(params, results);
     });
+
+    // 4) 캐시 저장
+    if (response.type === "success") cacheSet(params, response);
+
+    console.log(`[결과] ${response.type}: ${response.rows?.length || 0}건`);
+    console.log("═".repeat(50));
+    res.json(response);
+  } catch (err) {
+    console.error("[/api/search] 에러:", err.message);
+    res.status(500).json({ type: "error", message: "서버 내부 에러: " + err.message });
   }
-
-  // 2) KDSIS 자동 검색
-  const results = await searchKDSIS(params);
-
-  // 3) 응답 포맷
-  const response = formatResultsForChat(params, results);
-  console.log(`[결과] ${response.type}: ${response.rows?.length || 0}건`);
-  console.log("═".repeat(50));
-
-  res.json(response);
 });
 
 // POST /api/search/direct — 필드 직접 지정 검색
@@ -791,9 +872,22 @@ app.post("/api/search/direct", async (req, res) => {
   }
 
   console.log(`\n[직접 검색]`, params);
-  const results = await searchKDSIS(params);
-  const response = formatResultsForChat(params, results);
-  res.json(response);
+
+  try {
+    const cached = cacheGet(params);
+    if (cached) return res.json(cached);
+
+    const response = await enqueueSearch(async () => {
+      const results = await searchKDSIS(params);
+      return formatResultsForChat(params, results);
+    });
+
+    if (response.type === "success") cacheSet(params, response);
+    res.json(response);
+  } catch (err) {
+    console.error("[/api/search/direct] 에러:", err.message);
+    res.status(500).json({ type: "error", message: "서버 내부 에러: " + err.message });
+  }
 });
 
 // GET/POST /api/debug — 진단 모드 (내부 상태 전부 덤프)
@@ -820,7 +914,7 @@ app.post("/api/debug/detail", async (req, res) => {
       ? req.body.params
       : { 규격상태: "활성" };
 
-  let browser;
+  let context;
   const diag = {
     params,
     searchOk: false,
@@ -836,11 +930,8 @@ app.post("/api/debug/detail", async (req, res) => {
   };
 
   try {
-    browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-    const context = await browser.newContext({
+    const browser = await getBrowser();
+    context = await browser.newContext({
       locale: "ko-KR",
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -995,7 +1086,7 @@ app.post("/api/debug/detail", async (req, res) => {
   } catch (err) {
     diag.error = err.message;
   } finally {
-    if (browser) await browser.close();
+    if (context) await context.close().catch(() => {});
   }
 
   res.json(diag);
@@ -1008,6 +1099,18 @@ app.get("/api/screenshot", (req, res) => {
     if (err) res.status(404).json({ error: "스크린샷이 없습니다." });
   });
 });
+
+// ── Graceful shutdown ────────────────────────────────────
+async function shutdown() {
+  console.log("\n[종료] 서버를 종료합니다...");
+  if (_browser) {
+    try { await _browser.close(); } catch {}
+    _browser = null;
+  }
+  process.exit(0);
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 // ── 서버 시작 ────────────────────────────────────────────
 app.listen(PORT, () => {
