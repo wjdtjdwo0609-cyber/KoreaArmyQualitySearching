@@ -44,10 +44,32 @@ async function getBrowser() {
   if (_browser) {
     try { await _browser.close(); } catch {}
   }
-  _browser = await chromium.launch({
+  // Prefer PLAYWRIGHT_CHROMIUM_PATH env, then check common system locations
+  const customPath = process.env.PLAYWRIGHT_CHROMIUM_PATH || "";
+  const systemPaths = [
+    "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+    "/usr/bin/google-chrome-stable",
+  ];
+  let executablePath;
+  if (customPath) {
+    executablePath = customPath;
+  } else {
+    const fs = require("fs");
+    for (const p of systemPaths) {
+      if (fs.existsSync(p)) { executablePath = p; break; }
+    }
+  }
+  const launchOpts = {
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-  });
+  };
+  if (executablePath) {
+    console.log(`[Browser] 커스텀 경로 사용: ${executablePath}`);
+    launchOpts.executablePath = executablePath;
+  }
+  _browser = await chromium.launch(launchOpts);
   _browserUseCount = 1;
   return _browser;
 }
@@ -296,6 +318,7 @@ async function searchKDSIS(params) {
     const browser = await getBrowser();
     context = await browser.newContext({
       locale: "ko-KR",
+      ignoreHTTPSErrors: true,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     });
@@ -555,6 +578,7 @@ async function diagnosticSearch(params) {
     const browser = await getBrowser();
     context = await browser.newContext({
       locale: "ko-KR",
+      ignoreHTTPSErrors: true,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     });
@@ -933,6 +957,7 @@ app.post("/api/debug/detail", async (req, res) => {
     const browser = await getBrowser();
     context = await browser.newContext({
       locale: "ko-KR",
+      ignoreHTTPSErrors: true,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     });
