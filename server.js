@@ -349,6 +349,7 @@ async function _runSearchOnce(params) {
     const browser = await getBrowser();
     context = await browser.newContext({
       locale: "ko-KR",
+      ignoreHTTPSErrors: true,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     });
@@ -615,6 +616,7 @@ async function diagnosticSearch(params) {
     const browser = await getBrowser();
     context = await browser.newContext({
       locale: "ko-KR",
+      ignoreHTTPSErrors: true,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     });
@@ -970,6 +972,7 @@ app.post("/api/debug/detail", async (req, res) => {
     const browser = await getBrowser();
     context = await browser.newContext({
       locale: "ko-KR",
+      ignoreHTTPSErrors: true,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     });
