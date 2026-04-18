@@ -207,6 +207,10 @@
     .sample-wrap{margin-top:2rem;width:100%;max-width:640px;display:flex;flex-direction:column;align-items:center;gap:.5rem}
     .sample-label{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
 
+    /* Scroll-to-bottom FAB */
+    .scroll-bottom-btn{position:fixed;bottom:6rem;left:50%;transform:translateX(-50%);z-index:40;padding:.4rem 1rem;font-size:.8125rem;font-weight:500;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:var(--r-full);box-shadow:var(--sh-md);cursor:pointer;font-family:var(--font);transition:all .15s;animation:fadeUp .2s ease-out}
+    .scroll-bottom-btn:hover{background:var(--surface-alt);border-color:var(--primary-light);color:var(--primary)}
+
     /* Input */
     .input-area{padding:.75rem 1.5rem 1.25rem;background:var(--bg);max-width:calc(800px + 4rem);width:100%;margin:0 auto}
     .input-wrap{position:relative}
@@ -231,13 +235,21 @@
     .send-btn{flex-shrink:0;width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:var(--primary);border:none;border-radius:var(--r-sm);color:var(--inverse);cursor:pointer;font-size:1.0625rem;transition:all .15s}
     .send-btn:hover:not(:disabled){background:var(--primary-dark);transform:scale(1.05)}
     .send-btn:disabled{background:var(--border);cursor:not-allowed;opacity:.6}
-    .hint{font-size:.75rem;color:var(--muted);text-align:center;margin-top:.5rem}
+    .hint-row{display:flex;align-items:center;justify-content:center;gap:.75rem;margin-top:.5rem}
+    .hint{font-size:.75rem;color:var(--muted);text-align:center}
+    .char-count{font-size:.6875rem;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+    .char-count.warn{color:var(--warning)}
+    .char-count.full{color:var(--error);font-weight:600}
 
     /* Screenshot debug */
     .debug-toggle{font-size:.8125rem;color:var(--muted);cursor:pointer;text-decoration:underline;margin-top:.75rem;display:inline-block;padding:.25rem .125rem;background:none;border:none;font-family:var(--font)}
     .debug-toggle:hover{color:var(--text)}
     .debug-img{max-width:100%;border:1px solid var(--border);border-radius:var(--r-sm);margin-top:.5rem;display:none}
     .debug-img.show{display:block}
+
+    /* Skip-to-content (WCAG 2.4.1) */
+    .skip-link{position:absolute;top:-100%;left:50%;transform:translateX(-50%);z-index:99999;padding:.5rem 1.25rem;background:var(--primary);color:var(--inverse);border-radius:0 0 var(--r-md) var(--r-md);font-size:.875rem;font-weight:600;text-decoration:none;transition:top .15s}
+    .skip-link:focus{top:0}
 
     /* sr-only for screen readers */
     .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
@@ -327,9 +339,28 @@
       .input-area{max-width:calc(1080px + 4rem)}
       body{font-size:1rem}
     }
+    /* Print */
+    @media print{
+      body{height:auto;overflow:visible;background:#fff;color:#000;font-size:10pt}
+      .header,.input-area,.scroll-bottom-btn,.toasts,.modal,.debug-toggle,.debug-img,.send-btn,.reset-btn,.icon-btn,.welcome,.msg-actions,.view-toggle,.sort-control,.sort-dir,.pagination,.search-status,.skeleton-cards,.dots,.recent-panel,.skip-link{display:none !important}
+      .app{display:block;height:auto}
+      .messages{overflow:visible;padding:0;height:auto}
+      .msg{max-width:100%;padding:0;break-inside:avoid;margin-bottom:1rem}
+      .msg--user .bubble{background:#eee;color:#000;print-color-adjust:exact}
+      .msg--bot .bubble{border:1px solid #ccc;box-shadow:none}
+      .card{break-inside:avoid;border:1px solid #ccc;box-shadow:none;margin-bottom:.75rem;page-break-inside:avoid}
+      .card-more{display:block}
+      .card-more[open] dl{display:grid}
+      .result-table{display:table;font-size:8pt}
+      .result-table td,.result-table th{white-space:normal;max-width:none}
+      .hidden{display:block !important}
+      mark{background:#ff0;color:#000}
+      .spec-no.copyable::after{display:none}
+    }
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#messages">본문으로 건너뛰기</a>
   <div class="app">
     <header class="header" role="banner">
       <h1>🎖️ 국방 AI 어시스턴트 — KDSIS 실시간 검색</h1>
@@ -397,6 +428,8 @@
       </div>
     </main>
 
+    <button class="scroll-bottom-btn hidden" id="scrollBottomBtn" type="button" aria-label="최신 메시지로 이동">↓ 최신</button>
+
     <div class="input-area" role="region" aria-label="검색 입력">
       <div class="input-wrap">
         <div class="recent-panel" id="recentPanel" role="listbox" aria-label="최근 검색" hidden></div>
@@ -406,7 +439,10 @@
           <button class="send-btn" type="submit" id="sendBtn" disabled aria-label="전송">▲</button>
         </form>
       </div>
-      <p class="hint" id="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+K 새 대화 · ? 단축키 · KDSIS 실시간 조회</p>
+      <div class="hint-row">
+        <p class="hint" id="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+K 새 대화 · ? 단축키 · KDSIS 실시간 조회</p>
+        <span class="char-count hidden" id="charCount" aria-live="off"></span>
+      </div>
     </div>
   </div>
 
@@ -450,7 +486,12 @@ let busy = false;
 // ── Toast system ──
 const toastsEl = document.getElementById("toasts");
 const TOAST_ICONS = { success: "✓", error: "✕", info: "ⓘ" };
+const TOAST_MAX = 3;
 function toast(message, variant = "info", duration = 2200) {
+  // Cap: remove the oldest if we're at the limit
+  while (toastsEl.children.length >= TOAST_MAX) {
+    toastsEl.children[0].remove();
+  }
   const t = document.createElement("div");
   t.className = `toast toast--${variant}`;
   t.setAttribute("role", variant === "error" ? "alert" : "status");
@@ -692,13 +733,17 @@ function renderRecent() {
   }
   let html = `<div class="recent-head"><strong>최근 검색</strong><button class="recent-clear" type="button" data-recent-clear>모두 지우기</button></div>`;
   recentList.forEach((text, i) => {
-    html += `<div class="recent-item${i === recentActiveIdx ? " active" : ""}" role="option" aria-selected="${i === recentActiveIdx}" data-recent-idx="${i}">
+    const id = `recent-opt-${i}`;
+    html += `<div class="recent-item${i === recentActiveIdx ? " active" : ""}" role="option" id="${id}" aria-selected="${i === recentActiveIdx}" data-recent-idx="${i}">
       <span class="ri-icon" aria-hidden="true">🕐</span>
       <span class="ri-text">${esc(text)}</span>
       <button type="button" class="ri-remove" aria-label="제거" data-recent-remove="${esc(text)}">✕</button>
     </div>`;
   });
   recentPanel.innerHTML = html;
+  // Connect aria-activedescendant so screen readers announce the active option
+  if (recentActiveIdx >= 0) input.setAttribute("aria-activedescendant", `recent-opt-${recentActiveIdx}`);
+  else input.removeAttribute("aria-activedescendant");
 }
 function showRecent() {
   if (recentList.length === 0) return;
@@ -709,6 +754,7 @@ function showRecent() {
 function hideRecent() {
   recentPanel.hidden = true;
   recentActiveIdx = -1;
+  input.removeAttribute("aria-activedescendant");
 }
 function moveRecentSelection(delta) {
   if (recentPanel.hidden) {
@@ -854,11 +900,21 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ── Input handling ──
+const charCountEl = document.getElementById("charCount");
+const INPUT_MAX = Number(input.getAttribute("maxlength")) || 500;
+function updateCharCount() {
+  const len = input.value.length;
+  if (len === 0) { charCountEl.classList.add("hidden"); return; }
+  charCountEl.classList.remove("hidden");
+  charCountEl.textContent = `${len}/${INPUT_MAX}`;
+  charCountEl.classList.toggle("warn", len >= INPUT_MAX * 0.9 && len < INPUT_MAX);
+  charCountEl.classList.toggle("full", len >= INPUT_MAX);
+}
 input.addEventListener("input", () => {
   input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight, 120) + "px";
   sendBtn.disabled = input.value.trim().length === 0;
-  // Hide the recent panel as soon as the user starts typing
+  updateCharCount();
   if (input.value.length > 0) hideRecent();
 });
 
@@ -1306,8 +1362,7 @@ function addResultMessage(data) {
   }
 
   addBotMessage(html, { skipPersist: true });
-  // Persist structured payload so we can re-render after reload without re-fetching
-  pushEvent({ type: "result", data: serializableResult(data) });
+  pushEvent({ type: "result", data: serializableResult(data), _uid: uid });
 }
 
 // Slice rows for the given page; pageSize 0 means "all in one page"
@@ -1372,11 +1427,12 @@ function rerender(uid) {
     dirBtn.textContent = dir === "desc" ? "▼" : "▲";
     dirBtn.title = dir === "desc" ? "내림차순" : "오름차순";
   }
+  // Persist state so it survives reload
+  updatePersistedResultState(uid);
 }
-// Back-compat alias: applySort now just forwards to rerender
+// Back-compat alias
 const applySort = rerender;
 
-// Strip non-essential fields before storing
 function serializableResult(data) {
   return {
     type: data.type,
@@ -1385,6 +1441,24 @@ function serializableResult(data) {
     columns: data.columns,
     searchParams: data.searchParams,
   };
+}
+// After the first render, capture the current sort/page state into the
+// persisted event so restoreSession can re-apply it. Called lazily on
+// sort/page changes via rerender().
+function updatePersistedResultState(uid) {
+  const entry = resultDataByUid.get(uid);
+  if (!entry) return;
+  // Walk backwards through sessionEvents to find the matching result event
+  for (let i = sessionEvents.length - 1; i >= 0; i--) {
+    const ev = sessionEvents[i];
+    if (ev.type === "result" && ev._uid === uid) {
+      ev._sort = entry.sort ? { ...entry.sort } : null;
+      ev._page = entry.page;
+      ev._pageSize = entry.pageSize;
+      saveSession();
+      break;
+    }
+  }
 }
 
 // 결과 내 버튼 위임 (뷰 토글, 캡처 토글, 규격번호 복사, 재시도)
@@ -1583,11 +1657,30 @@ function setStatus(text, isBusy) {
   statusEl.className = "status" + (isBusy ? " busy" : "");
 }
 
+// Smart auto-scroll: only scroll if user is already near the bottom.
+// Otherwise show a floating "↓ 최신" button.
+const scrollBtn = document.getElementById("scrollBottomBtn");
+function isNearBottom() {
+  const threshold = 120;
+  return messages.scrollHeight - messages.scrollTop - messages.clientHeight < threshold;
+}
 function scrollBottom() {
   requestAnimationFrame(() => {
-    messages.scrollTop = messages.scrollHeight;
+    if (isNearBottom()) {
+      messages.scrollTop = messages.scrollHeight;
+    } else {
+      scrollBtn.classList.remove("hidden");
+    }
   });
 }
+function forceScrollBottom() {
+  messages.scrollTop = messages.scrollHeight;
+  scrollBtn.classList.add("hidden");
+}
+scrollBtn.addEventListener("click", forceScrollBottom);
+messages.addEventListener("scroll", () => {
+  if (isNearBottom()) scrollBtn.classList.add("hidden");
+});
 
 function esc(str) {
   if (!str) return "";
@@ -1647,7 +1740,22 @@ function restoreSession() {
     try {
       if (ev.type === "user") addMessage(ev.text, "user");
       else if (ev.type === "bot") addBotMessage(ev.html);
-      else if (ev.type === "result" && ev.data) addResultMessage({ ...ev.data, __restored: true });
+      else if (ev.type === "result" && ev.data) {
+        addResultMessage({ ...ev.data, __restored: true });
+        // Restore sort/page state if it was persisted
+        if (ev._uid && (ev._sort || ev._page || ev._pageSize)) {
+          const entry = resultDataByUid.get(ev._uid);
+          // The uid changed — find the *latest* entry we just created
+          const latestUid = [...resultDataByUid.keys()].pop();
+          const latestEntry = latestUid ? resultDataByUid.get(latestUid) : null;
+          if (latestEntry) {
+            if (ev._sort) latestEntry.sort = ev._sort;
+            if (ev._page != null) latestEntry.page = ev._page;
+            if (ev._pageSize != null) latestEntry.pageSize = ev._pageSize;
+            rerender(latestUid);
+          }
+        }
+      }
     } catch (e) {
       console.warn("session replay skipped:", e);
     }
