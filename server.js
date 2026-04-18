@@ -917,7 +917,11 @@ app.post("/api/search", async (req, res) => {
     res.json(response);
   } catch (err) {
     console.error("[/api/search] 처리 중 에러:", err);
-    res.status(500).json({ type: "error", message: "서버 내부 에러: " + (err.message || String(err)) });
+    res.status(500).json({
+      type: "error",
+      message: "서버 내부 에러: " + (err.message || String(err)),
+      detail: err.stack || String(err),
+    });
   }
 });
 
@@ -935,7 +939,11 @@ app.post("/api/search/direct", async (req, res) => {
     res.json(response);
   } catch (err) {
     console.error("[/api/search/direct] 처리 중 에러:", err);
-    res.status(500).json({ type: "error", message: "서버 내부 에러: " + (err.message || String(err)) });
+    res.status(500).json({
+      type: "error",
+      message: "서버 내부 에러: " + (err.message || String(err)),
+      detail: err.stack || String(err),
+    });
   }
 });
 
