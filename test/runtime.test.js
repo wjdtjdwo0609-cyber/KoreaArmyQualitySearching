@@ -11,6 +11,7 @@ const {
   createSerialQueue,
   withTimeout,
   isTransient,
+  expandHeaderCells,
 } = require("../lib/runtime");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -167,4 +168,40 @@ test("isTransient: rejects non-transient strings", () => {
   assert.equal(isTransient(""), false);
   assert.equal(isTransient(null), false);
   assert.equal(isTransient(undefined), false);
+});
+
+// ── expandHeaderCells ──────────────────────────────────────
+
+test("expandHeaderCells: no colspan keeps names 1:1", () => {
+  assert.deepEqual(
+    expandHeaderCells([
+      { name: "규격번호", colspan: 1 },
+      { name: "규격서명", colspan: 1 },
+    ]),
+    ["규격번호", "규격서명"]
+  );
+});
+
+test("expandHeaderCells: colspan=3 expands to name(1..3)", () => {
+  assert.deepEqual(
+    expandHeaderCells([{ name: "형상관리책임기관", colspan: 3 }]),
+    ["형상관리책임기관(1)", "형상관리책임기관(2)", "형상관리책임기관(3)"]
+  );
+});
+
+test("expandHeaderCells: mixed single + group headers preserve order", () => {
+  assert.deepEqual(
+    expandHeaderCells([
+      { name: "규격번호", colspan: 1 },
+      { name: "형상관리책임기관", colspan: 3 },
+      { name: "규격상태", colspan: 1 },
+    ]),
+    [
+      "규격번호",
+      "형상관리책임기관(1)",
+      "형상관리책임기관(2)",
+      "형상관리책임기관(3)",
+      "규격상태",
+    ]
+  );
 });

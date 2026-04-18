@@ -522,8 +522,17 @@ async function _runSearchOnce(params) {
               document.querySelector(`#${gridId} thead`);
             const columnNames = [];
             if (thead) {
+              // Same colspan expansion as the initial parse — group headers
+              // (colspan > 1) must become name(1)/name(2)/... so td index
+              // aligns with column name.
               thead.querySelectorAll("th[col_id]").forEach((th) => {
-                columnNames.push((th.textContent || "").trim());
+                const name = (th.textContent || "").trim() || th.getAttribute("col_id");
+                const colspan = parseInt(th.getAttribute("colspan") || "1", 10);
+                if (colspan > 1) {
+                  for (let i = 0; i < colspan; i++) columnNames.push(`${name}(${i + 1})`);
+                } else {
+                  columnNames.push(name);
+                }
               });
             }
             const tbody = document.querySelector(`#${gridId}_body_tbody`);
