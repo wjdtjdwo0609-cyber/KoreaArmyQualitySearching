@@ -194,6 +194,17 @@
     .empty-state-icon{font-size:2rem;margin-bottom:.75rem;opacity:.6}
     .error-msg{color:var(--error);font-size:.8125rem;padding:.5rem .75rem;background:var(--error-tint);border-radius:var(--r-sm);border:1px solid var(--error-border)}
 
+    /* Collapsible error block with copyable full payload */
+    .err-block{background:var(--error-tint);border:1px solid var(--error-border);border-radius:var(--r-sm);padding:.625rem .75rem;margin:.25rem 0}
+    .err-headline{color:var(--error);font-size:.9rem;font-weight:500;margin-bottom:.375rem}
+    .err-details{font-size:.8125rem;margin-top:.375rem}
+    .err-details summary{cursor:pointer;color:var(--error);font-weight:500;padding:2px 0;user-select:none}
+    .err-details summary:hover{opacity:.8}
+    .err-details[open] summary{margin-bottom:.375rem}
+    .err-pre{font-family:var(--mono);font-size:.75rem;white-space:pre-wrap;word-break:break-word;padding:.5rem .625rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text);max-height:260px;overflow:auto;margin:0}
+    .err-extra{font-size:.8125rem;color:var(--muted);margin-top:.5rem}
+    .err-extra code{font-family:var(--mono);background:var(--bg);padding:1px 5px;border-radius:3px;font-size:.75rem}
+
     /* Welcome */
     .welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;padding:2rem;animation:fadeUp .5s ease-out}
     .welcome-icon{font-size:3.5rem;margin-bottom:1rem;animation:pulse 2s ease-in-out infinite}
@@ -836,7 +847,31 @@ function retryLast() {
   else if (lastSearch.kind === "direct") runDirectSearch(lastSearch.params, lastSearch.label);
 }
 function retryButtonHTML() {
-  return `<div class="msg-actions"><button type="button" class="msg-action" data-retry>🔄 다시 시도</button></div>`;
+  return `<div class="msg-actions"><button type="button" class="msg-action" data-retry>🔄 다시 시도</button><button type="button" class="msg-action" data-copy-error>📋 에러 전체 복사</button></div>`;
+}
+// Full error block with collapsible "더보기" + copyable payload.
+// `details` is the raw multi-line error (HTTP snippet, stack, etc.) —
+// rendered inside a <pre> wrapped in <details> so it's collapsed by default.
+function errorBlockHTML(headline, details, opts) {
+  const extra = (opts && opts.extra) || "";
+  // data-error-full carries the full plain-text version for the copy button
+  const fullText = [
+    headline,
+    details || "",
+    extra ? extra.replace(/<[^>]+>/g, "") : "",
+    `시각: ${new Date().toISOString()}`,
+    `URL: ${location.href}`,
+    `UA: ${navigator.userAgent}`,
+  ].filter(Boolean).join("\n\n");
+  let html = `<div class="err-block" data-error-full="${esc(fullText)}">`;
+  html += `<div class="err-headline">❌ ${esc(headline)}</div>`;
+  if (details) {
+    html += `<details class="err-details"><summary>더보기</summary>`;
+    html += `<pre class="err-pre">${esc(details)}</pre></details>`;
+  }
+  if (extra) html += `<div class="err-extra">${extra}</div>`;
+  html += `</div>`;
+  return html;
 }
 function emptyStateHTML(label) {
   return `<div class="empty-state">
@@ -1103,7 +1138,7 @@ async function runDirectSearch(params, displayText) {
       removeTyping(typingId);
       const snippet = rawText.slice(0, 300).replace(/\s+/g, " ").trim();
       addBotMessage(
-        `❌ 서버 에러 (HTTP ${res.status}).<div class="error-msg" style="margin-top:.5rem;font-family:var(--mono);font-size:.75rem;white-space:pre-wrap">${esc(snippet)}…</div>` +
+        errorBlockHTML(`서버 에러 (HTTP ${res.status})`, snippet) +
         retryButtonHTML()
       );
       setStatus("● 온라인", false);
@@ -1113,11 +1148,11 @@ async function runDirectSearch(params, displayText) {
     }
     removeTyping(typingId);
     if (data.type === "success" && data.rows?.length > 0) addResultMessage(data);
-    else if (data.type === "error") addBotMessage(`❌ ${esc(data.message)}` + retryButtonHTML());
+    else if (data.type === "error") addBotMessage(errorBlockHTML(data.message, data.detail || data.stack) + retryButtonHTML());
     else addBotMessage(emptyStateHTML(displayText) + retryButtonHTML());
   } catch (err) {
     removeTyping(typingId);
-    addBotMessage(`❌ 네트워크 에러: ${esc(err.message)}` + retryButtonHTML());
+    addBotMessage(errorBlockHTML(`네트워크 에러: ${err.message}`, err.stack || "") + retryButtonHTML());
   }
   setStatus("● 온라인", false);
   busy = false;
@@ -1160,11 +1195,11 @@ async function sendQuery(text) {
       removeTyping(typingId);
       const snippet = rawText.slice(0, 300).replace(/\s+/g, " ").trim();
       addBotMessage(
-        `❌ 서버가 JSON이 아닌 응답을 반환했습니다 (HTTP ${res.status} ${res.statusText}).<br>` +
-        `<div class="error-msg" style="margin-top:.5rem;font-family:var(--mono);font-size:.75rem;white-space:pre-wrap">${esc(snippet)}${rawText.length > 300 ? "…" : ""}</div>` +
-        `<p style="margin-top:.5rem;font-size:.8125rem;color:var(--muted)">` +
-        `원인 추정: Render 타임아웃 / 콜드 스타트 / 메모리 부족. ` +
-        `터미널에서 <code>curl -v .../api/search/direct</code>로 재확인해 보세요.</p>` +
+        errorBlockHTML(
+          `서버가 JSON이 아닌 응답을 반환했습니다 (HTTP ${res.status} ${res.statusText})`,
+          snippet + (rawText.length > 300 ? "…" : ""),
+          { extra: `원인 추정: Render 타임아웃 / 콜드 스타트 / 메모리 부족. 터미널에서 <code>curl -v .../api/search/direct</code>로 재확인해 보세요.` }
+        ) +
         retryButtonHTML()
       );
       setStatus("● 온라인", false);
@@ -1177,13 +1212,13 @@ async function sendQuery(text) {
     if (data.type === "success" && data.rows && data.rows.length > 0) {
       addResultMessage(data);
     } else if (data.type === "error") {
-      addBotMessage(`❌ ${esc(data.message)}` + retryButtonHTML());
+      addBotMessage(errorBlockHTML(data.message, data.detail || data.stack) + retryButtonHTML());
     } else {
       addBotMessage(emptyStateHTML(text) + retryButtonHTML());
     }
   } catch (err) {
     removeTyping(typingId);
-    addBotMessage(`❌ 네트워크 에러: ${esc(err.message)}` + retryButtonHTML());
+    addBotMessage(errorBlockHTML(`네트워크 에러: ${err.message}`, err.stack || "") + retryButtonHTML());
   }
 
   setStatus("● 온라인", false);
@@ -1543,6 +1578,23 @@ async function handleClickDelegated(e) {
       return;
     }
     retryLast();
+    return;
+  }
+  // Copy full error block (headline + details + URL + UA + timestamp)
+  const copyErrBtn = e.target.closest("[data-copy-error]");
+  if (copyErrBtn) {
+    e.preventDefault();
+    // Walk up to find the nearest .err-block sibling in the same bubble
+    const bubble = copyErrBtn.closest(".bubble");
+    const block = bubble ? bubble.querySelector(".err-block") : null;
+    const full = block ? block.getAttribute("data-error-full") : null;
+    if (!full) {
+      toast("복사할 에러 내용이 없습니다", "info");
+      return;
+    }
+    const ok = await copyText(full);
+    if (ok) toast("에러 전체를 복사했습니다", "success");
+    else toast("복사 실패 — 텍스트를 직접 선택해 복사하세요", "error");
     return;
   }
   // Spec number copy — works for both result cards and the welcome sample card

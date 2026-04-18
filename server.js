@@ -890,30 +890,39 @@ app.post("/api/search", async (req, res) => {
     return res.status(400).json({ error: "query 파라미터가 필요합니다." });
   }
 
-  console.log(`\n${"═".repeat(50)}`);
-  console.log(`[요청] "${query}"`);
+  try {
+    console.log(`\n${"═".repeat(50)}`);
+    console.log(`[요청] "${query}"`);
 
-  // 1) 자연어 → 검색 파라미터 (AI 또는 규칙 기반)
-  const params = await parseQuery(query);
-  console.log("[파싱]", params);
+    // 1) 자연어 → 검색 파라미터 (AI 또는 규칙 기반)
+    const params = await parseQuery(query);
+    console.log("[파싱]", params);
 
-  if (Object.keys(params).length === 0) {
-    return res.json({
-      message: "검색 조건을 파악할 수 없습니다. 규격번호, 장비명, 부품명 등을 포함해 주세요.",
-      type: "empty",
-      searchParams: {},
+    if (Object.keys(params).length === 0) {
+      return res.json({
+        message: "검색 조건을 파악할 수 없습니다. 규격번호, 장비명, 부품명 등을 포함해 주세요.",
+        type: "empty",
+        searchParams: {},
+      });
+    }
+
+    // 2) KDSIS 자동 검색
+    const results = await searchKDSIS(params);
+
+    // 3) 응답 포맷
+    const response = formatResultsForChat(params, results);
+    console.log(`[결과] ${response.type}: ${response.rows?.length || 0}건`);
+    console.log("═".repeat(50));
+
+    res.json(response);
+  } catch (err) {
+    console.error("[/api/search] 처리 중 에러:", err);
+    res.status(500).json({
+      type: "error",
+      message: "서버 내부 에러: " + (err.message || String(err)),
+      detail: err.stack || String(err),
     });
   }
-
-  // 2) KDSIS 자동 검색
-  const results = await searchKDSIS(params);
-
-  // 3) 응답 포맷
-  const response = formatResultsForChat(params, results);
-  console.log(`[결과] ${response.type}: ${response.rows?.length || 0}건`);
-  console.log("═".repeat(50));
-
-  res.json(response);
 });
 
 // POST /api/search/direct — 필드 직접 지정 검색
@@ -923,10 +932,19 @@ app.post("/api/search/direct", async (req, res) => {
     return res.status(400).json({ error: "params 객체가 필요합니다." });
   }
 
-  console.log(`\n[직접 검색]`, params);
-  const results = await searchKDSIS(params);
-  const response = formatResultsForChat(params, results);
-  res.json(response);
+  try {
+    console.log(`\n[직접 검색]`, params);
+    const results = await searchKDSIS(params);
+    const response = formatResultsForChat(params, results);
+    res.json(response);
+  } catch (err) {
+    console.error("[/api/search/direct] 처리 중 에러:", err);
+    res.status(500).json({
+      type: "error",
+      message: "서버 내부 에러: " + (err.message || String(err)),
+      detail: err.stack || String(err),
+    });
+  }
 });
 
 // GET/POST /api/debug — 진단 모드 (내부 상태 전부 덤프)
