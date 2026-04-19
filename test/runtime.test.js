@@ -12,6 +12,7 @@ const {
   withTimeout,
   isTransient,
   expandHeaderCells,
+  auditResults,
 } = require("../lib/runtime");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -204,4 +205,84 @@ test("expandHeaderCells: mixed single + group headers preserve order", () => {
       "규격상태",
     ]
   );
+});
+
+// ── auditResults ────────────────────────────────────────────
+
+test("auditResults: clean input passes with no warnings", () => {
+  const out = auditResults({
+    columns: ["규격번호", "규격서명"],
+    rows: [
+      { 규격번호: "1005-0409", 규격서명: "총몸" },
+      { 규격번호: "1005-0410", 규격서명: "총열" },
+    ],
+    totalCount: 2,
+  });
+  assert.equal(out.rows.length, 2);
+  assert.deepEqual(out.warnings, []);
+});
+
+test("auditResults: drops all-empty rows and warns", () => {
+  const out = auditResults({
+    columns: ["a", "b"],
+    rows: [
+      { a: "x", b: "y" },
+      { a: "", b: "" },
+      { a: null, b: undefined },
+    ],
+    totalCount: 1,
+  });
+  assert.equal(out.rows.length, 1);
+  assert.equal(out.warnings.find((w) => w.code === "EMPTY_ROWS_DROPPED").count, 2);
+});
+
+test("auditResults: drops exact duplicate rows and warns", () => {
+  const out = auditResults({
+    columns: ["a"],
+    rows: [{ a: "1" }, { a: "1" }, { a: "2" }, { a: "1" }],
+    totalCount: 2,
+  });
+  assert.equal(out.rows.length, 2);
+  assert.equal(out.warnings.find((w) => w.code === "DUPLICATE_ROWS_DROPPED").count, 2);
+});
+
+test("auditResults: flags column shape mismatch", () => {
+  const out = auditResults({
+    columns: ["a", "b", "c"],
+    rows: [{ a: "1", b: "2", c: "3" }, { a: "x", b: "y" }],
+    totalCount: 2,
+  });
+  const w = out.warnings.find((x) => x.code === "COLUMN_SHAPE_MISMATCH");
+  assert.ok(w);
+  assert.equal(w.count, 1);
+  assert.equal(w.expected, 3);
+});
+
+test("auditResults: warns when totalCount > rendered (scroll incomplete)", () => {
+  const out = auditResults({
+    columns: ["a"],
+    rows: [{ a: "1" }, { a: "2" }],
+    totalCount: 50,
+  });
+  const w = out.warnings.find((x) => x.code === "SCROLL_INCOMPLETE");
+  assert.ok(w);
+  assert.equal(w.totalCount, 50);
+  assert.equal(w.rendered, 2);
+});
+
+test("auditResults: warns when totalCount < rendered (overshoot)", () => {
+  const out = auditResults({
+    columns: ["a"],
+    rows: [{ a: "1" }, { a: "2" }, { a: "3" }],
+    totalCount: 1,
+  });
+  const w = out.warnings.find((x) => x.code === "OVERSHOT_TOTALCOUNT");
+  assert.ok(w);
+});
+
+test("auditResults: missing data defaults to empty result set", () => {
+  const out = auditResults(null);
+  assert.deepEqual(out.rows, []);
+  assert.deepEqual(out.columns, []);
+  assert.deepEqual(out.warnings, []);
 });

@@ -25,6 +25,7 @@ const {
   createSerialQueue,
   withTimeout,
   isTransient,
+  auditResults,
 } = require("./lib/runtime");
 
 const app = express();
@@ -361,6 +362,21 @@ async function _runSearch(params) {
       }
       if (attempt > 0 && result && !result.error) {
         console.log(`[KDSIS] 재시도 성공 (시도 ${attempt + 1})`);
+      }
+      // 정상 결과 경로에만 백엔드 검증 적용. 에러 응답은 audit을 건너뛰고
+      // 그대로 통과시켜 retry/에러 핸들러가 원형을 볼 수 있게 둔다.
+      if (result && !result.error) {
+        const audited = auditResults(result);
+        if (audited.warnings.length > 0) {
+          console.warn(
+            `[KDSIS][audit] params=${cacheKey(params) || "(empty)"} warnings=${JSON.stringify(audited.warnings)}`
+          );
+        }
+        return {
+          rows: audited.rows,
+          columns: audited.columns,
+          totalCount: audited.totalCount || audited.rows.length,
+        };
       }
       return result;
     } catch (err) {
