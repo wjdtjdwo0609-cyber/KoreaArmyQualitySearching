@@ -156,24 +156,76 @@ const SEARCH_BUTTON_SELECTORS = [
   'button:has-text("검색")',
 ];
 
-async function clickSearchButton(page) {
-  const tried = [];
-  for (const sel of SEARCH_BUTTON_SELECTORS) {
-    tried.push(sel);
-    try {
-      const el = await page.$(sel);
-      if (!el) continue;
-      await page.click(sel);
-      return { clicked: sel, tried };
-    } catch (_) {
-      // 다음 후보 시도
+async function clickSearchButton(page, { timeout = 10000 } = {}) {
+  // WebSquare가 버튼을 JS로 나중에 붙이는 경우가 있어, 즉시 $()로 조회하면
+  // 초기화가 끝나기 전에 실패한다. 250ms 간격으로 deadline까지 폴링하며
+  // 최초로 DOM에 붙은 후보를 클릭.
+  const deadline = Date.now() + timeout;
+  let lastErr = null;
+  while (Date.now() < deadline) {
+    for (const sel of SEARCH_BUTTON_SELECTORS) {
+      try {
+        const el = await page.$(sel);
+        if (!el) continue;
+        await page.click(sel);
+        return { clicked: sel, tried: SEARCH_BUTTON_SELECTORS };
+      } catch (e) {
+        lastErr = e;
+      }
     }
+    await page.waitForTimeout(250);
   }
+  // 타임아웃 순간의 DOM 스냅샷 — "어떤 셀렉터를 시도했는지"만으로는
+  // 폼 자체가 비어있었는지 / 버튼만 다른 id로 렌더됐는지 구분이 안 된다.
+  const diagnostics = await page.evaluate((fieldIds) => {
+    const btnIds = [];
+    document.querySelectorAll('[id^="btn_"], [id*="earch"]').forEach((el) => {
+      if (el.id && btnIds.length < 20) btnIds.push(el.id);
+    });
+    const presentFields = fieldIds.filter((id) => !!document.getElementById(id));
+    return {
+      url: location.href,
+      title: document.title,
+      btnIds,
+      fieldsPresent: presentFields.length,
+      fieldsTotal: fieldIds.length,
+    };
+  }, Object.values(FIELD_MAP).map((c) => c.id)).catch(() => ({ error: "diagnostics evaluate failed" }));
+
   const err = new Error(
-    `검색 버튼을 찾지 못했습니다. 시도한 셀렉터: ${tried.join(", ")}`
+    `검색 버튼을 찾지 못했습니다. 시도한 셀렉터: ${SEARCH_BUTTON_SELECTORS.join(", ")}${
+      lastErr ? ` (마지막 에러: ${lastErr.message})` : ""
+    }`
   );
-  err.tried = tried;
+  err.tried = SEARCH_BUTTON_SELECTORS;
+  err.diagnostics = diagnostics;
   throw err;
+}
+
+// Waits for the KDSIS search form to be fully initialized. Previously we used
+// a fixed `page.waitForTimeout(2000)` which is brittle: on slow days WebSquare
+// needs >2s to attach the form fields + buttons, and subsequent fillSearchForm
+// / clickSearchButton calls then fail silently. This polls for explicit DOM
+// signals — at least one known form field + at least one known search button
+// — and throws KDSIS_FORM_NOT_READY on timeout (more informative than the
+// downstream "검색 버튼을 찾지 못했습니다").
+async function waitForKdsisReady(page, { timeout = 20000 } = {}) {
+  // Need to pass selectors into evaluate context — can't close over module-level consts.
+  const fieldIds = Object.values(FIELD_MAP).map((c) => c.id);
+  const buttonSelectors = SEARCH_BUTTON_SELECTORS;
+  try {
+    await page.waitForFunction(
+      ([ids, btns]) => {
+        const hasField = ids.some((id) => !!document.getElementById(id));
+        const hasButton = btns.some((s) => !!document.querySelector(s));
+        return hasField && hasButton;
+      },
+      [fieldIds, buttonSelectors],
+      { timeout, polling: 250 }
+    );
+  } catch (err) {
+    throw new Error("KDSIS_FORM_NOT_READY");
+  }
 }
 
 // Fills the KDSIS search form on an already-loaded page. Shared between the
@@ -508,8 +560,8 @@ async function _runSearchOnce(params) {
       timeout: 30000,
     });
 
-    // WebSquare 로딩 대기
-    await page.waitForTimeout(2000);
+    // WebSquare 폼 준비 대기 — 고정 슬립 대신 필드+버튼 DOM 출현을 실 대기.
+    await waitForKdsisReady(page);
 
     // 2) 검색 필드 입력
     console.log("[KDSIS] 검색 조건 입력:", params);
@@ -763,7 +815,7 @@ async function openRowDetail({ params, rowKey }) {
   try {
     const page = await context.newPage();
     await page.goto(KDSIS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForTimeout(2000);
+    await waitForKdsisReady(page);
 
     // KDSIS 차단 페이지 감지 — 본문에 "접근이 거부" / "차단" / 403 표시가 있으면
     // 조기 실패시켜 호출자가 503을 돌려줄 수 있게 한다.
@@ -819,6 +871,29 @@ async function openRowDetail({ params, rowKey }) {
     try { await context.close(); } catch {}
     throw e;
   }
+}
+
+// openRowDetail 래퍼: 메인 검색 경로(_runSearch)와 동일하게 transient 에러에
+// 한해 한 번 재시도한다. ROW_NOT_FOUND / KDSIS_BLOCKED 는 사실관계 에러이므로
+// 재시도 가치가 없어 즉시 전달. Download pool 슬롯을 추가로 점유하지 않도록
+// 호출은 pool 내부에서 하고, 재시도도 같은 슬롯 안에서 순차 실행한다.
+const DETAIL_RETRIES = 1;
+async function openRowDetailWithRetry({ params, rowKey }) {
+  let lastErr;
+  for (let attempt = 0; attempt <= DETAIL_RETRIES; attempt++) {
+    try {
+      return await openRowDetail({ params, rowKey });
+    } catch (err) {
+      lastErr = err;
+      const msg = err && err.message ? err.message : String(err);
+      if (msg === "ROW_NOT_FOUND" || msg === "KDSIS_BLOCKED") throw err;
+      if (attempt >= DETAIL_RETRIES) throw err;
+      if (!(isTransient(msg) || msg === "KDSIS_FORM_NOT_READY")) throw err;
+      console.warn(`[detail-retry ${attempt + 1}/${DETAIL_RETRIES}] ${msg}`);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  throw lastErr;
 }
 
 // 상세 페이지(+ 서브프레임)에서 첨부 후보를 긁어온다. 반환 형태:
@@ -1573,7 +1648,7 @@ app.get("/api/detail", async (req, res) => {
 
   try {
     const result = await downloadPool.run(async () => {
-      const { context, page } = await openRowDetail({ params, rowKey });
+      const { context, page } = await openRowDetailWithRetry({ params, rowKey });
       try {
         const attachments = await extractAttachments(page);
         return { attachments, rowKey };
@@ -1593,7 +1668,9 @@ app.get("/api/detail", async (req, res) => {
       return res.status(404).json({ error: `해당 규격(${rowKey})을 결과에서 찾지 못했습니다.` });
     }
     console.error("[/api/detail]", msg);
-    res.status(500).json({ error: msg });
+    const body = { error: msg };
+    if (err.diagnostics) body.diagnostics = err.diagnostics;
+    res.status(500).json(body);
   }
 });
 
@@ -1623,7 +1700,7 @@ app.get("/api/attachment", async (req, res) => {
       // 첨부 메타를 먼저 확보 (캐시 우선).
       const metaKey = `${cacheKey(params)}|${rowKey}`;
       let meta = detailCache.get(metaKey);
-      const { context, page } = await openRowDetail({ params, rowKey });
+      const { context, page } = await openRowDetailWithRetry({ params, rowKey });
       try {
         if (!meta) {
           const attachments = await extractAttachments(page);
