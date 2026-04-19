@@ -202,21 +202,16 @@ async function clickSearchButton(page, { timeout = 10000 } = {}) {
   throw err;
 }
 
-// Waits for the KDSIS search form to be fully initialized. Previously we used
-// a fixed `page.waitForTimeout(2000)` which is brittle: on slow days WebSquare
-// needs >2s to attach the form fields + buttons, and subsequent fillSearchForm
-// / clickSearchButton calls then fail silently. This polls for explicit DOM
-// signals — at least one known form field + at least one known search button
-// — and throws KDSIS_FORM_NOT_READY on timeout (more informative than the
-// downstream "검색 버튼을 찾지 못했습니다").
 // Waits for the KDSIS search form to be fully initialized. Originally this
 // required BOTH a known field id AND a known button selector to be present,
 // but KDSIS's WebSquare wraps / re-ids some field inputs, so the field check
 // was flaky while the button check was reliable. fillSearchForm already
 // tolerates missing fields individually, so the minimum useful readiness
 // signal is "search button exists" — that's exactly what the next step
-// (clickSearchButton) needs. On timeout we throw KDSIS_FORM_NOT_READY with
-// a DOM diagnostic attached for operator triage.
+// (clickSearchButton) needs. On timeout we collect a DOM diagnostic and
+// re-classify the failure: an essentially-empty body (bodyLen < 20) with a
+// normal title is almost always KDSIS returning a blank shell because the IP
+// was throttled / the deep link was refused, not a readiness race.
 async function waitForKdsisReady(page, { timeout = 20000 } = {}) {
   const buttonSelectors = SEARCH_BUTTON_SELECTORS;
   try {
@@ -238,10 +233,16 @@ async function waitForKdsisReady(page, { timeout = 20000 } = {}) {
         fieldsPresent: fieldIds.filter((id) => !!document.getElementById(id)).length,
         fieldsTotal: fieldIds.length,
         bodyLen: (document.body?.textContent || "").length,
+        iframes: document.querySelectorAll("iframe").length,
+        scripts: document.querySelectorAll("script").length,
       };
     }, Object.values(FIELD_MAP).map((c) => c.id)).catch(() => ({ error: "diagnostics evaluate failed" }));
-    const err = new Error("KDSIS_FORM_NOT_READY");
+    // Empty body after the full timeout = KDSIS served a blank page.
+    // That's a block / deep-link refusal, not a readiness race.
+    const empty = diagnostics && typeof diagnostics.bodyLen === "number" && diagnostics.bodyLen < 20;
+    const err = new Error(empty ? "KDSIS_BLOCKED" : "KDSIS_FORM_NOT_READY");
     err.diagnostics = diagnostics;
+    if (empty) recordBlockHit();
     throw err;
   }
 }
@@ -829,10 +830,23 @@ async function openRowDetail({ params, rowKey }) {
     acceptDownloads: true,
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    // Popup URL (popYn=Y) sometimes returns a blank shell when visited
+    // without a parent context — setting Referer to the portal nudges KDSIS
+    // to render the full form in the popup mode. Harmless if ignored.
+    extraHTTPHeaders: { Referer: "https://kdsis.dapa.go.kr/" },
   });
   try {
     const page = await context.newPage();
-    await page.goto(KDSIS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+    const response = await page.goto(KDSIS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+    // Anti-scrape defenses commonly answer with 403 / 429 before any DOM is
+    // parsed. Catch it at the transport layer so we don't burn 20s waiting
+    // for a form that's never coming.
+    if (response && !response.ok() && response.status() !== 304) {
+      recordBlockHit();
+      const err = new Error("KDSIS_BLOCKED");
+      err.diagnostics = { httpStatus: response.status(), url: response.url() };
+      throw err;
+    }
     await waitForKdsisReady(page);
 
     // KDSIS 차단 페이지 감지 — 본문에 "접근이 거부" / "차단" / 403 표시가 있으면
@@ -1694,7 +1708,9 @@ app.get("/api/detail", async (req, res) => {
     const msg = err.message || String(err);
     if (msg === "KDSIS_BLOCKED") {
       res.setHeader("Retry-After", "60");
-      return res.status(503).json({ error: "KDSIS가 현재 요청을 차단하고 있습니다. 잠시 후 다시 시도해 주세요." });
+      const body = { error: "KDSIS가 현재 요청을 차단하고 있습니다. 잠시 후 다시 시도해 주세요." };
+      if (err.diagnostics) body.diagnostics = err.diagnostics;
+      return res.status(503).json(body);
     }
     if (msg === "ROW_NOT_FOUND") {
       return res.status(404).json({ error: `해당 규격(${rowKey})을 결과에서 찾지 못했습니다.` });
