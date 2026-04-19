@@ -12,6 +12,10 @@ const {
   withTimeout,
   isTransient,
   expandHeaderCells,
+  auditResults,
+  createRateLimiter,
+  createByteBoundedCache,
+  createConcurrentQueue,
 } = require("../lib/runtime");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -204,4 +208,219 @@ test("expandHeaderCells: mixed single + group headers preserve order", () => {
       "규격상태",
     ]
   );
+});
+
+// ── auditResults ────────────────────────────────────────────
+
+test("auditResults: clean input passes with no warnings", () => {
+  const out = auditResults({
+    columns: ["규격번호", "규격서명"],
+    rows: [
+      { 규격번호: "1005-0409", 규격서명: "총몸" },
+      { 규격번호: "1005-0410", 규격서명: "총열" },
+    ],
+    totalCount: 2,
+  });
+  assert.equal(out.rows.length, 2);
+  assert.deepEqual(out.warnings, []);
+});
+
+test("auditResults: drops all-empty rows and warns", () => {
+  const out = auditResults({
+    columns: ["a", "b"],
+    rows: [
+      { a: "x", b: "y" },
+      { a: "", b: "" },
+      { a: null, b: undefined },
+    ],
+    totalCount: 1,
+  });
+  assert.equal(out.rows.length, 1);
+  assert.equal(out.warnings.find((w) => w.code === "EMPTY_ROWS_DROPPED").count, 2);
+});
+
+test("auditResults: drops exact duplicate rows and warns", () => {
+  const out = auditResults({
+    columns: ["a"],
+    rows: [{ a: "1" }, { a: "1" }, { a: "2" }, { a: "1" }],
+    totalCount: 2,
+  });
+  assert.equal(out.rows.length, 2);
+  assert.equal(out.warnings.find((w) => w.code === "DUPLICATE_ROWS_DROPPED").count, 2);
+});
+
+test("auditResults: flags column shape mismatch", () => {
+  const out = auditResults({
+    columns: ["a", "b", "c"],
+    rows: [{ a: "1", b: "2", c: "3" }, { a: "x", b: "y" }],
+    totalCount: 2,
+  });
+  const w = out.warnings.find((x) => x.code === "COLUMN_SHAPE_MISMATCH");
+  assert.ok(w);
+  assert.equal(w.count, 1);
+  assert.equal(w.expected, 3);
+});
+
+test("auditResults: warns when totalCount > rendered (scroll incomplete)", () => {
+  const out = auditResults({
+    columns: ["a"],
+    rows: [{ a: "1" }, { a: "2" }],
+    totalCount: 50,
+  });
+  const w = out.warnings.find((x) => x.code === "SCROLL_INCOMPLETE");
+  assert.ok(w);
+  assert.equal(w.totalCount, 50);
+  assert.equal(w.rendered, 2);
+});
+
+test("auditResults: warns when totalCount < rendered (overshoot)", () => {
+  const out = auditResults({
+    columns: ["a"],
+    rows: [{ a: "1" }, { a: "2" }, { a: "3" }],
+    totalCount: 1,
+  });
+  const w = out.warnings.find((x) => x.code === "OVERSHOT_TOTALCOUNT");
+  assert.ok(w);
+});
+
+test("auditResults: missing data defaults to empty result set", () => {
+  const out = auditResults(null);
+  assert.deepEqual(out.rows, []);
+  assert.deepEqual(out.columns, []);
+  assert.deepEqual(out.warnings, []);
+});
+
+// ── createRateLimiter ──────────────────────────────────────
+
+test("rateLimiter: allows up to max within window", () => {
+  const rl = createRateLimiter({ windowMs: 1000, max: 3 });
+  assert.equal(rl.check("ip").allowed, true);
+  assert.equal(rl.check("ip").allowed, true);
+  assert.equal(rl.check("ip").allowed, true);
+  const denied = rl.check("ip");
+  assert.equal(denied.allowed, false);
+  assert.ok(denied.retryAfterMs > 0);
+  assert.ok(denied.retryAfterMs <= 1000);
+});
+
+test("rateLimiter: separate keys do not share budget", () => {
+  const rl = createRateLimiter({ windowMs: 1000, max: 1 });
+  assert.equal(rl.check("a").allowed, true);
+  assert.equal(rl.check("b").allowed, true);
+  assert.equal(rl.check("a").allowed, false);
+  assert.equal(rl.check("b").allowed, false);
+});
+
+test("rateLimiter: window slides as old hits expire", async () => {
+  const rl = createRateLimiter({ windowMs: 80, max: 2 });
+  rl.check("k"); rl.check("k");
+  assert.equal(rl.check("k").allowed, false);
+  await sleep(120);
+  assert.equal(rl.check("k").allowed, true);
+});
+
+test("rateLimiter: reset wipes a single key", () => {
+  const rl = createRateLimiter({ windowMs: 10_000, max: 1 });
+  rl.check("k");
+  assert.equal(rl.check("k").allowed, false);
+  rl.reset("k");
+  assert.equal(rl.check("k").allowed, true);
+});
+
+// ── createByteBoundedCache ─────────────────────────────────
+
+test("byteCache: get/set with byte tracking", () => {
+  const c = createByteBoundedCache({ ttlMs: 10_000, maxEntries: 10, maxBytes: 1000 });
+  assert.equal(c.set("a", "one", 100), true);
+  assert.equal(c.bytes, 100);
+  assert.equal(c.get("a"), "one");
+});
+
+test("byteCache: evicts oldest to fit new entry under maxBytes", () => {
+  const c = createByteBoundedCache({ ttlMs: 10_000, maxEntries: 10, maxBytes: 200 });
+  c.set("a", "x", 100);
+  c.set("b", "y", 90);
+  c.set("c", "z", 50); // forces eviction; total 240 → drop a (oldest) to fit
+  assert.equal(c.get("a"), null);
+  assert.equal(c.get("b"), "y");
+  assert.equal(c.get("c"), "z");
+  assert.ok(c.bytes <= 200);
+});
+
+test("byteCache: single entry exceeding maxBytes is rejected", () => {
+  const c = createByteBoundedCache({ ttlMs: 10_000, maxEntries: 10, maxBytes: 100 });
+  assert.equal(c.set("big", "X", 200), false);
+  assert.equal(c.get("big"), null);
+  assert.equal(c.bytes, 0);
+});
+
+test("byteCache: re-set updates bytes and LRU position", () => {
+  const c = createByteBoundedCache({ ttlMs: 10_000, maxEntries: 10, maxBytes: 1000 });
+  c.set("a", "v1", 100);
+  c.set("a", "v2", 50);
+  assert.equal(c.get("a"), "v2");
+  assert.equal(c.bytes, 50);
+});
+
+test("byteCache: TTL expiry clears bytes", async () => {
+  const c = createByteBoundedCache({ ttlMs: 80, maxEntries: 10, maxBytes: 1000 });
+  c.set("a", "x", 100);
+  await sleep(120);
+  assert.equal(c.get("a"), null);
+  assert.equal(c.bytes, 0);
+});
+
+test("byteCache: delete reclaims bytes", () => {
+  const c = createByteBoundedCache({ ttlMs: 10_000, maxEntries: 10, maxBytes: 1000 });
+  c.set("a", "x", 100);
+  c.set("b", "y", 200);
+  c.delete("a");
+  assert.equal(c.bytes, 200);
+  assert.equal(c.size, 1);
+});
+
+// ── createConcurrentQueue ──────────────────────────────────
+
+test("concurrentQueue: respects concurrency limit", async () => {
+  const q = createConcurrentQueue(2);
+  let peak = 0, inflight = 0;
+  const task = async () => {
+    inflight++; peak = Math.max(peak, inflight);
+    await sleep(30);
+    inflight--;
+  };
+  await Promise.all([q.run(task), q.run(task), q.run(task), q.run(task)]);
+  assert.equal(peak, 2);
+});
+
+test("concurrentQueue: returns task result and surfaces rejection", async () => {
+  const q = createConcurrentQueue(1);
+  assert.equal(await q.run(async () => 42), 42);
+  await assert.rejects(q.run(async () => { throw new Error("x"); }), /x/);
+});
+
+test("concurrentQueue: one task's rejection doesn't stall others", async () => {
+  const q = createConcurrentQueue(1);
+  const p1 = q.run(async () => { throw new Error("boom"); });
+  const p2 = q.run(async () => "ok");
+  await p1.catch(() => {});
+  assert.equal(await p2, "ok");
+});
+
+test("concurrentQueue: active/queued counters track state", async () => {
+  const q = createConcurrentQueue(1);
+  let release;
+  const blocked = q.run(() => new Promise((r) => { release = r; }));
+  // Wait a tick for scheduler to promote the first task to active
+  await Promise.resolve(); await Promise.resolve();
+  q.run(async () => "later");
+  assert.equal(q.active, 1);
+  assert.equal(q.queued, 1);
+  release();
+  await blocked;
+});
+
+test("concurrentQueue: n<1 normalizes to 1", async () => {
+  const q = createConcurrentQueue(0);
+  assert.equal(q.limit, 1);
 });
