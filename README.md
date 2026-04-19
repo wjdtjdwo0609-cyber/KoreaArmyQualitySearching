@@ -41,9 +41,16 @@ AI_PROVIDER=claude              # claude | gemini
 ANTHROPIC_API_KEY=sk-ant-...    # Claude 사용 시
 GEMINI_API_KEY=AIza...          # Gemini 사용 시
 PORT=3000                       # 선택
-KDSIS_CACHE_TTL_MS=60000        # 캐시 TTL (선택)
+KDSIS_CACHE_TTL_MS=60000        # 검색 결과 캐시 TTL (선택)
 KDSIS_SEARCH_TIMEOUT_MS=75000   # 검색 1회 wall-clock 타임아웃 (선택)
 KDSIS_MAX_SCROLLS=10            # 무한 스크롤 최대 반복 횟수 (선택)
+# 첨부파일 프록시 (선택)
+KDSIS_DOWNLOAD_CONCURRENCY=2    # 다운로드 동시 실행 상한 (검색과 분리된 풀)
+KDSIS_DETAIL_TTL_MS=600000      # 첨부 목록 메타 캐시 TTL (10분)
+KDSIS_ATTACH_TTL_MS=300000      # 다운로드 바이트 캐시 TTL (5분)
+KDSIS_ATTACH_CACHE_MAX_BYTES=52428800  # 바이트 캐시 총합 상한 (50MB)
+KDSIS_DOWNLOAD_RATE_LIMIT=10    # 분당 IP별 요청 수 상한
+KDSIS_DOWNLOAD_RATE_WINDOW_MS=60000  # 위 상한의 윈도우
 ```
 
 AI 키가 없으면 자동으로 규칙 기반 파싱으로 폴백합니다.
@@ -57,6 +64,7 @@ AI 키가 없으면 자동으로 규칙 기반 파싱으로 폴백합니다.
 - WebSquare 그리드 무한 스크롤 자동 처리 (기본 최대 10회, 새 행이 안 올라오면 조기 종료, `KDSIS_MAX_SCROLLS`로 조정)
 
 ### 챗봇 UI
+- 첨부파일 칩 (카드당 "📎 첨부파일 보기" → `/api/detail` → 링크 칩, `<a download>`로 브라우저 직접 저장)
 - 카드 뷰 ↔ 표 뷰 토글
 - 컬럼 정렬 (오름/내림/해제)
 - 페이지네이션 (20/50/100/전체)
@@ -81,13 +89,23 @@ AI 키가 없으면 자동으로 규칙 기반 파싱으로 폴백합니다.
 - **타임아웃 + 1회 재시도**: 45초 wall-clock, transient 에러만 재시도
 - **Graceful shutdown**: SIGTERM/SIGINT에서 브라우저 정리
 
+### 첨부파일 프록시 (zero-storage)
+- 파일을 서버 디스크에 저장하지 않고 요청 시점에 KDSIS를 다시 열어 바이트를 그대로 스트림
+- 매 요청은 새 Playwright **컨텍스트**로 세션을 처음부터 재현 → 쿠키 만료 창 없음 (브라우저 싱글턴은 그대로)
+- 검색과 분리된 **다운로드 풀** (`createConcurrentQueue`, 기본 2 동시), 검색 지연 없음
+- **바이트 캐시** (5분, 총합 50MB) + **메타 캐시** (10분) — 동일 파일 재다운로드 즉답
+- **Per-IP rate limit** (기본 10 req/min) + 차단 감지 시 `503 Retry-After` 응답
+- `/api/health`에 `downloadActive / downloadQueued / attachCacheBytes / kdsisBlockCount15m` 노출
+
 ## API
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | POST | `/api/search` | 자연어 검색 (`{ query }`) |
 | POST | `/api/search/direct` | 필드 직접 지정 (`{ params }`) |
-| GET  | `/api/health` | 브라우저/캐시/in-flight 상태 |
+| GET  | `/api/detail` | 특정 행의 첨부 메타 조회 (`?params=<json>&key=<규격번호>`) |
+| GET  | `/api/attachment` | 첨부 스트리밍 프록시 (`?params=<json>&key=<규격번호>&id=<id>`) |
+| GET  | `/api/health` | 브라우저/캐시/in-flight/다운로드 풀 상태 |
 | GET  | `/api/screenshot` | 마지막 검색 화면 캡처 |
 | GET/POST | `/api/debug` | 진단 모드 (DOM 상태 덤프) |
 | POST | `/api/debug/detail` | 첫 결과 상세 팝업 분석 |
@@ -104,6 +122,12 @@ curl -X POST http://localhost:3000/api/search \
 curl -X POST http://localhost:3000/api/search/direct \
   -H "Content-Type: application/json" \
   -d '{"params": {"규격번호": "1005-0409"}}'
+
+# 첨부 목록
+curl 'http://localhost:3000/api/detail?params=%7B%22규격번호%22%3A%221005-0409%22%7D&key=1005-0409'
+
+# 첨부 다운로드 (스트리밍, 서버 디스크 경유 0)
+curl -OJ 'http://localhost:3000/api/attachment?params=%7B%22규격번호%22%3A%221005-0409%22%7D&key=1005-0409&id=<id>'
 
 # 헬스
 curl http://localhost:3000/api/health
