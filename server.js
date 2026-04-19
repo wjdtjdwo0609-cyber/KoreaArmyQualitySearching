@@ -209,22 +209,40 @@ async function clickSearchButton(page, { timeout = 10000 } = {}) {
 // signals — at least one known form field + at least one known search button
 // — and throws KDSIS_FORM_NOT_READY on timeout (more informative than the
 // downstream "검색 버튼을 찾지 못했습니다").
+// Waits for the KDSIS search form to be fully initialized. Originally this
+// required BOTH a known field id AND a known button selector to be present,
+// but KDSIS's WebSquare wraps / re-ids some field inputs, so the field check
+// was flaky while the button check was reliable. fillSearchForm already
+// tolerates missing fields individually, so the minimum useful readiness
+// signal is "search button exists" — that's exactly what the next step
+// (clickSearchButton) needs. On timeout we throw KDSIS_FORM_NOT_READY with
+// a DOM diagnostic attached for operator triage.
 async function waitForKdsisReady(page, { timeout = 20000 } = {}) {
-  // Need to pass selectors into evaluate context — can't close over module-level consts.
-  const fieldIds = Object.values(FIELD_MAP).map((c) => c.id);
   const buttonSelectors = SEARCH_BUTTON_SELECTORS;
   try {
     await page.waitForFunction(
-      ([ids, btns]) => {
-        const hasField = ids.some((id) => !!document.getElementById(id));
-        const hasButton = btns.some((s) => !!document.querySelector(s));
-        return hasField && hasButton;
-      },
-      [fieldIds, buttonSelectors],
+      (btns) => btns.some((s) => !!document.querySelector(s)),
+      buttonSelectors,
       { timeout, polling: 250 }
     );
-  } catch (err) {
-    throw new Error("KDSIS_FORM_NOT_READY");
+  } catch (_) {
+    const diagnostics = await page.evaluate((fieldIds) => {
+      const btnIds = [];
+      document.querySelectorAll('[id^="btn_"], [id*="earch"]').forEach((el) => {
+        if (el.id && btnIds.length < 20) btnIds.push(el.id);
+      });
+      return {
+        url: location.href,
+        title: document.title,
+        btnIds,
+        fieldsPresent: fieldIds.filter((id) => !!document.getElementById(id)).length,
+        fieldsTotal: fieldIds.length,
+        bodyLen: (document.body?.textContent || "").length,
+      };
+    }, Object.values(FIELD_MAP).map((c) => c.id)).catch(() => ({ error: "diagnostics evaluate failed" }));
+    const err = new Error("KDSIS_FORM_NOT_READY");
+    err.diagnostics = diagnostics;
+    throw err;
   }
 }
 
