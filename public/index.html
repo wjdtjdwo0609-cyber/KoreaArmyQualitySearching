@@ -1778,7 +1778,15 @@ async function handleClickDelegated(e) {
         panel.innerHTML = `<div class="attach-err">요청이 많습니다. ${esc(retry)}초 뒤 다시 시도하세요.</div>`;
         toast("요청이 너무 많습니다", "info");
       } else if (res.status === 503) {
-        panel.innerHTML = `<div class="attach-err">KDSIS가 일시적으로 차단했습니다. 잠시 뒤 재시도하세요.</div>`;
+        let parsed = null;
+        try { parsed = await res.json(); } catch {}
+        let html = `<div class="attach-err">KDSIS가 일시적으로 차단했습니다. 잠시 뒤 재시도하세요.`;
+        if (parsed && parsed.diagnostics) {
+          const diag = JSON.stringify(parsed.diagnostics, null, 2);
+          html += `<details class="attach-diag"><summary>진단 정보</summary><pre>${esc(diag)}</pre></details>`;
+        }
+        html += `</div>`;
+        panel.innerHTML = html;
         toast("KDSIS 접속이 일시 차단되었습니다", "error");
       } else if (!res.ok) {
         const raw = await res.text();
