@@ -184,6 +184,32 @@ async function clickSearchButton(page, { timeout = 10000 } = {}) {
   throw err;
 }
 
+// Waits for the KDSIS search form to be fully initialized. Previously we used
+// a fixed `page.waitForTimeout(2000)` which is brittle: on slow days WebSquare
+// needs >2s to attach the form fields + buttons, and subsequent fillSearchForm
+// / clickSearchButton calls then fail silently. This polls for explicit DOM
+// signals — at least one known form field + at least one known search button
+// — and throws KDSIS_FORM_NOT_READY on timeout (more informative than the
+// downstream "검색 버튼을 찾지 못했습니다").
+async function waitForKdsisReady(page, { timeout = 20000 } = {}) {
+  // Need to pass selectors into evaluate context — can't close over module-level consts.
+  const fieldIds = Object.values(FIELD_MAP).map((c) => c.id);
+  const buttonSelectors = SEARCH_BUTTON_SELECTORS;
+  try {
+    await page.waitForFunction(
+      ([ids, btns]) => {
+        const hasField = ids.some((id) => !!document.getElementById(id));
+        const hasButton = btns.some((s) => !!document.querySelector(s));
+        return hasField && hasButton;
+      },
+      [fieldIds, buttonSelectors],
+      { timeout, polling: 250 }
+    );
+  } catch (err) {
+    throw new Error("KDSIS_FORM_NOT_READY");
+  }
+}
+
 // Fills the KDSIS search form on an already-loaded page. Shared between the
 // main search path and the detail/attachment replay flow so the form-fill
 // behavior can't drift between endpoints. FIELD_MAP must be initialized
@@ -516,8 +542,8 @@ async function _runSearchOnce(params) {
       timeout: 30000,
     });
 
-    // WebSquare 로딩 대기
-    await page.waitForTimeout(2000);
+    // WebSquare 폼 준비 대기 — 고정 슬립 대신 필드+버튼 DOM 출현을 실 대기.
+    await waitForKdsisReady(page);
 
     // 2) 검색 필드 입력
     console.log("[KDSIS] 검색 조건 입력:", params);
@@ -771,7 +797,7 @@ async function openRowDetail({ params, rowKey }) {
   try {
     const page = await context.newPage();
     await page.goto(KDSIS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForTimeout(2000);
+    await waitForKdsisReady(page);
 
     // KDSIS 차단 페이지 감지 — 본문에 "접근이 거부" / "차단" / 403 표시가 있으면
     // 조기 실패시켜 호출자가 503을 돌려줄 수 있게 한다.
