@@ -340,7 +340,7 @@ async function searchKDSIS(params) {
 // Wall-clock timeout + single retry on transient errors. Cold starts and
 // the WebSquare grid can flake; one retry hides ~90% of those without
 // doubling worst-case latency for the happy path.
-const SEARCH_TIMEOUT_MS = Number(process.env.KDSIS_SEARCH_TIMEOUT_MS || 45_000);
+const SEARCH_TIMEOUT_MS = Number(process.env.KDSIS_SEARCH_TIMEOUT_MS || 75_000);
 const SEARCH_RETRIES = 1;
 
 async function _runSearch(params) {
@@ -532,10 +532,14 @@ async function _runSearchOnce(params) {
       return data;
     }, GRID_ID);
 
-    // 6) 무한 스크롤 — 추가 데이터 로딩 (최대 3회 스크롤)
-    //   매 스크롤마다 thead를 다시 읽어서 동적 파싱 — col_id 하드코딩 없음
-    const MAX_SCROLLS = 3;
-    if (results.rows.length > 0 && results.totalCount > results.rows.length) {
+    // 6) 무한 스크롤 — 추가 데이터 로딩
+    //   매 스크롤마다 thead를 다시 읽어서 동적 파싱 — col_id 하드코딩 없음.
+    //   MAX_SCROLLS는 안전 상한선일 뿐, 새 행이 안 올라오면 즉시 break 한다.
+    //   totalCount 게이트를 두지 않는다 — #spn_listCnt 파싱이 실패해 totalCount가
+    //   rows.length로 폴백되면 게이트가 항상 false라 전체 결과가 첫 배치(≈10건)에
+    //   갇혔다. 루프 내부의 "새 행 없음" 조기 종료가 진짜 신호.
+    const MAX_SCROLLS = Number(process.env.KDSIS_MAX_SCROLLS || 10);
+    if (results.rows.length > 0) {
       console.log(`[KDSIS] 무한 스크롤 시작 (현재 ${results.rows.length}건 / 총 ${results.totalCount}건)`);
 
       for (let i = 0; i < MAX_SCROLLS; i++) {

@@ -42,7 +42,8 @@ ANTHROPIC_API_KEY=sk-ant-...    # Claude 사용 시
 GEMINI_API_KEY=AIza...          # Gemini 사용 시
 PORT=3000                       # 선택
 KDSIS_CACHE_TTL_MS=60000        # 캐시 TTL (선택)
-KDSIS_SEARCH_TIMEOUT_MS=45000   # 검색 1회 wall-clock 타임아웃 (선택)
+KDSIS_SEARCH_TIMEOUT_MS=75000   # 검색 1회 wall-clock 타임아웃 (선택)
+KDSIS_MAX_SCROLLS=10            # 무한 스크롤 최대 반복 횟수 (선택)
 ```
 
 AI 키가 없으면 자동으로 규칙 기반 파싱으로 폴백합니다.
@@ -53,7 +54,7 @@ AI 키가 없으면 자동으로 규칙 기반 파싱으로 폴백합니다.
 - 자연어 → 검색 파라미터 (Claude/Gemini)
 - 직접 파라미터 지정 (`/api/search/direct`)
 - 규격번호, 적용장비명, 제정기관, 규격상태 등 10개 필드 지원
-- WebSquare 그리드 무한 스크롤 자동 처리 (최대 3회 추가 로딩)
+- WebSquare 그리드 무한 스크롤 자동 처리 (기본 최대 10회, 새 행이 안 올라오면 조기 종료, `KDSIS_MAX_SCROLLS`로 조정)
 
 ### 챗봇 UI
 - 카드 뷰 ↔ 표 뷰 토글
