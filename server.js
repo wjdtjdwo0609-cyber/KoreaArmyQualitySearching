@@ -95,6 +95,38 @@ const AI_PROVIDER = (process.env.AI_PROVIDER || "claude").toLowerCase();
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 
+// KDSIS가 화면 리뉴얼할 때마다 검색 버튼 id가 조금씩 바뀌어 왔다. 한 개만
+// 믿지 말고 관찰된 후보를 순서대로 시도한다. 진단 모드와 메인 검색 경로가
+// 같은 리스트를 쓰도록 단일 상수로 통일.
+const SEARCH_BUTTON_SELECTORS = [
+  "#btn_search1",
+  "#btn_search",
+  "#btnSearch",
+  "#btn_srch",
+  'input[type="button"][value="검색"]',
+  'button:has-text("검색")',
+];
+
+async function clickSearchButton(page) {
+  const tried = [];
+  for (const sel of SEARCH_BUTTON_SELECTORS) {
+    tried.push(sel);
+    try {
+      const el = await page.$(sel);
+      if (!el) continue;
+      await page.click(sel);
+      return { clicked: sel, tried };
+    } catch (_) {
+      // 다음 후보 시도
+    }
+  }
+  const err = new Error(
+    `검색 버튼을 찾지 못했습니다. 시도한 셀렉터: ${tried.join(", ")}`
+  );
+  err.tried = tried;
+  throw err;
+}
+
 // ── KDSIS 검색 필드 매핑 ──────────────────────────────────
 const FIELD_MAP = {
   규격종류: { id: "gee_stdrdKndCd_input_0", type: "select" },
@@ -176,7 +208,7 @@ async function parseWithClaude(text) {
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 300,
       system: AI_SYSTEM_PROMPT,
       messages: [{ role: "user", content: text }],
@@ -397,9 +429,10 @@ async function _runSearchOnce(params) {
       }
     }
 
-    // 3) 검색 버튼 클릭
+    // 3) 검색 버튼 클릭 — 관찰된 id 후보들을 순차 시도 (진단 경로와 동일)
     console.log("[KDSIS] 검색 실행...");
-    await page.click("#btn_search1");
+    const { clicked: clickedBtn } = await clickSearchButton(page);
+    console.log(`[KDSIS] 검색 버튼: ${clickedBtn}`);
 
     // 4) 결과 로딩 대기
     // WebSquare w2grid는 검색 후 비동기로 행을 생성하므로
@@ -522,8 +555,17 @@ async function _runSearchOnce(params) {
               document.querySelector(`#${gridId} thead`);
             const columnNames = [];
             if (thead) {
+              // Same colspan expansion as the initial parse — group headers
+              // (colspan > 1) must become name(1)/name(2)/... so td index
+              // aligns with column name.
               thead.querySelectorAll("th[col_id]").forEach((th) => {
-                columnNames.push((th.textContent || "").trim());
+                const name = (th.textContent || "").trim() || th.getAttribute("col_id");
+                const colspan = parseInt(th.getAttribute("colspan") || "1", 10);
+                if (colspan > 1) {
+                  for (let i = 0; i < colspan; i++) columnNames.push(`${name}(${i + 1})`);
+                } else {
+                  columnNames.push(name);
+                }
               });
             }
             const tbody = document.querySelector(`#${gridId}_body_tbody`);
@@ -697,27 +739,14 @@ async function diagnosticSearch(params) {
       return matches.slice(0, 20);
     });
 
-    // 4) 여러 검색 버튼 셀렉터 순차 시도
-    const buttonSelectors = [
-      "#btn_search1",
-      "#btn_search",
-      "#btnSearch",
-      "#btn_srch",
-      'input[type="button"][value="검색"]',
-      'button:has-text("검색")',
-    ];
-    for (const btnSel of buttonSelectors) {
-      diag.searchButtonTried.push(btnSel);
-      try {
-        const exists = await page.$(btnSel);
-        if (exists) {
-          await page.click(btnSel);
-          diag.searchButtonClicked = btnSel;
-          break;
-        }
-      } catch (e) {
-        /* 다음 후보 */
-      }
+    // 4) 검색 버튼 클릭 — 메인 경로와 동일한 헬퍼 사용
+    try {
+      const res = await clickSearchButton(page);
+      diag.searchButtonTried = res.tried;
+      diag.searchButtonClicked = res.clicked;
+    } catch (e) {
+      diag.searchButtonTried = e.tried || [];
+      diag.searchButtonClicked = null;
     }
 
     await page.waitForLoadState("networkidle").catch(() => {});
@@ -1014,7 +1043,7 @@ app.post("/api/debug/detail", async (req, res) => {
         await page.dispatchEvent(sel, "change");
       } catch (e) {}
     }
-    await page.click("#btn_search1");
+    await clickSearchButton(page);
     await page.waitForFunction(
       () => {
         const tb = document.querySelector("#ggr_stndList_body_tbody");
