@@ -26,6 +26,9 @@ const {
   withTimeout,
   isTransient,
   auditResults,
+  createRateLimiter,
+  createByteBoundedCache,
+  createConcurrentQueue,
 } = require("./lib/runtime");
 
 const app = express();
@@ -91,6 +94,51 @@ const CACHE_TTL_MS = Number(process.env.KDSIS_CACHE_TTL_MS || 60_000);
 const cache = createCache({ ttlMs: CACHE_TTL_MS, max: 64 });
 const _inFlight = new Map();   // key → Promise<results>
 
+// ── Attachment proxy infra (/api/detail & /api/attachment) ──
+// Separate concurrency pool from the search queue — downloads shouldn't
+// block searches and vice versa. Lazy: attachment metadata + bytes are
+// only fetched when the client explicitly opens a row / clicks a file.
+const DOWNLOAD_CONCURRENCY = Number(process.env.KDSIS_DOWNLOAD_CONCURRENCY || 2);
+const downloadPool = createConcurrentQueue(DOWNLOAD_CONCURRENCY);
+
+// Metadata cache: { attachments: [...] } keyed by params + row-key.
+const DETAIL_TTL_MS = Number(process.env.KDSIS_DETAIL_TTL_MS || 600_000);
+const detailCache = createCache({ ttlMs: DETAIL_TTL_MS, max: 128 });
+
+// Byte cache: attachment file bytes keyed by params + row-key + attachment id.
+// Total bytes capped so one big file can't evict everything useful.
+const ATTACH_TTL_MS = Number(process.env.KDSIS_ATTACH_TTL_MS || 300_000);
+const ATTACH_CACHE_MAX_BYTES = Number(process.env.KDSIS_ATTACH_CACHE_MAX_BYTES || 50 * 1024 * 1024);
+const attachCache = createByteBoundedCache({
+  ttlMs: ATTACH_TTL_MS,
+  maxEntries: 32,
+  maxBytes: ATTACH_CACHE_MAX_BYTES,
+});
+
+// Per-IP rate limiter shared by /api/detail and /api/attachment. KDSIS has
+// historically IP-blocked callers that hammer it; we cap each client so a
+// single misbehaving user can't exhaust our KDSIS budget.
+const DOWNLOAD_RATE_LIMIT = Number(process.env.KDSIS_DOWNLOAD_RATE_LIMIT || 10);
+const DOWNLOAD_RATE_WINDOW_MS = Number(process.env.KDSIS_DOWNLOAD_RATE_WINDOW_MS || 60_000);
+const downloadRateLimiter = createRateLimiter({
+  windowMs: DOWNLOAD_RATE_WINDOW_MS,
+  max: DOWNLOAD_RATE_LIMIT,
+});
+
+// Rolling 15-min count of KDSIS-origin block responses (403 / "접근 거부"
+// landing). Lets the operator tell IP-block from code bug via /api/health.
+const BLOCK_WINDOW_MS = 15 * 60_000;
+let _blockHits = [];
+function recordBlockHit() {
+  const now = Date.now();
+  _blockHits.push(now);
+  _blockHits = _blockHits.filter((t) => t > now - BLOCK_WINDOW_MS);
+}
+function currentBlockCount() {
+  const cutoff = Date.now() - BLOCK_WINDOW_MS;
+  return _blockHits.filter((t) => t > cutoff).length;
+}
+
 // ── AI 설정 ──────────────────────────────────────────────
 const AI_PROVIDER = (process.env.AI_PROVIDER || "claude").toLowerCase();
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -126,6 +174,52 @@ async function clickSearchButton(page) {
   );
   err.tried = tried;
   throw err;
+}
+
+// Fills the KDSIS search form on an already-loaded page. Shared between the
+// main search path and the detail/attachment replay flow so the form-fill
+// behavior can't drift between endpoints. FIELD_MAP must be initialized
+// before this runs (it's defined below but both functions are hoisted at
+// call time, so ordering is fine).
+async function fillSearchForm(page, params) {
+  for (const [fieldName, value] of Object.entries(params || {})) {
+    const config = FIELD_MAP[fieldName];
+    if (!config) continue;
+    const sel = `#${config.id}`;
+    try {
+      await page.waitForSelector(sel, { timeout: 5000 });
+      if (config.type === "text") {
+        await page.fill(sel, "");
+        await page.fill(sel, value);
+      } else {
+        await page.selectOption(sel, { label: value });
+      }
+      await page.dispatchEvent(sel, "change");
+    } catch (err) {
+      console.warn(`[KDSIS] 폼 입력 실패 (${fieldName}):`, err.message);
+    }
+  }
+}
+
+// Waits for the grid to render or report zero rows. Used after clickSearchButton.
+async function waitForGridResult(page, timeoutMs = 15000) {
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForFunction(
+    () => {
+      const tb = document.querySelector("#ggr_stndList_body_tbody");
+      if (tb) {
+        const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+        if (rows.length > 0) return true;
+      }
+      const cnt = document.querySelector("#spn_listCnt");
+      if (cnt) {
+        const txt = (cnt.textContent || "").trim();
+        if (/^0건?$/.test(txt) || txt === "0") return true;
+      }
+      return false;
+    },
+    { timeout: timeoutMs }
+  ).catch(() => {});
 }
 
 // ── KDSIS 검색 필드 매핑 ──────────────────────────────────
@@ -646,6 +740,184 @@ async function _runSearchOnce(params) {
       try { await context.close(); } catch {}
     }
   }
+}
+
+// ── 첨부 다운로드 프록시 내부 로직 ─────────────────────────
+// openRowDetail: 새 context에서 검색 재현 → 지정 행 상세 팝업 진입.
+// extractAttachments: 팝업 프레임을 훑어서 { name, kind, id|href|onclick } 목록 추출.
+// triggerDownload: 메타 한 건을 받아 bytes + filename + contentType 반환.
+//
+// 세 함수 모두 "상태 없는 self-contained" — 세션 쿠키/페이지 캐시를 요청 간
+// 공유하지 않는다. 싱글턴 브라우저 + 새 context로 콜드 스타트는 피하면서
+// 세션 만료 윈도우도 없앤다.
+
+async function openRowDetail({ params, rowKey }) {
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    locale: "ko-KR",
+    ignoreHTTPSErrors: true,
+    acceptDownloads: true,
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto(KDSIS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForTimeout(2000);
+
+    // KDSIS 차단 페이지 감지 — 본문에 "접근이 거부" / "차단" / 403 표시가 있으면
+    // 조기 실패시켜 호출자가 503을 돌려줄 수 있게 한다.
+    const blocked = await page.evaluate(() => {
+      const t = (document.body?.textContent || "").slice(0, 400);
+      return /접근이\s*거부|차단|access\s*denied|forbidden/i.test(t);
+    }).catch(() => false);
+    if (blocked) {
+      recordBlockHit();
+      throw new Error("KDSIS_BLOCKED");
+    }
+
+    await fillSearchForm(page, params);
+    await clickSearchButton(page);
+    await waitForGridResult(page);
+    await page.waitForTimeout(1000);
+
+    // 지정 행(규격번호 일치) 클릭. 새 페이지/팝업이 열릴 수 있어 대기.
+    const newPagePromise = context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
+    const clicked = await page.evaluate((key) => {
+      const tbody = document.querySelector("#ggr_stndList_body_tbody");
+      if (!tbody) return false;
+      const rows = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+      for (const tr of rows) {
+        const text = tr.textContent || "";
+        if (key && text.includes(key)) {
+          const link = tr.querySelector("td a, span.w2grid_span a");
+          if (link) { link.click(); return true; }
+          const tds = tr.querySelectorAll("td");
+          if (tds[3]) { tds[3].click(); return true; }
+        }
+      }
+      // 키가 없거나 매칭 실패 — 첫 행을 폴백으로
+      const first = rows[0];
+      if (first) {
+        const link = first.querySelector("td a, span.w2grid_span a");
+        if (link) { link.click(); return "fallback_first"; }
+      }
+      return false;
+    }, rowKey);
+    if (!clicked) throw new Error("ROW_NOT_FOUND");
+
+    const newPage = await newPagePromise;
+    const target = newPage || page;
+    if (newPage) {
+      await newPage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+      await newPage.waitForTimeout(1500);
+    } else {
+      await page.waitForTimeout(1500);
+    }
+    return { context, page: target, rowMatch: clicked };
+  } catch (e) {
+    try { await context.close(); } catch {}
+    throw e;
+  }
+}
+
+// 상세 페이지(+ 서브프레임)에서 첨부 후보를 긁어온다. 반환 형태:
+//   { name, kind: "direct"|"js", id, href?, onclick?, frameUrl }
+// 직링크(A/B)와 JS 트리거(C)를 모두 수용. UI는 kind 무관하게 같은 URL을 쓰고,
+// triggerDownload가 kind별로 갈라진다.
+async function extractAttachments(page) {
+  const seen = new Map();
+  const out = [];
+  for (const frame of page.frames()) {
+    const batch = await frame.evaluate(() => {
+      const kw = /첨부|\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|zip|txt|xml|jpg|png)$/i;
+      const result = [];
+      document.querySelectorAll("a").forEach((a, idx) => {
+        const href = a.getAttribute("href") || "";
+        const onclick = a.getAttribute("onclick") || "";
+        const text = (a.textContent || "").trim();
+        const looksLikeFile =
+          /\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|zip|txt|xml|jpg|png)$/i.test(href) ||
+          /\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|zip|txt|xml|jpg|png)/i.test(text) ||
+          /download|fileDown|fn_download|첨부/i.test(onclick);
+        if (!looksLikeFile && !kw.test(text)) return;
+        if (!text) return;
+        result.push({
+          kind: href && !/^javascript:|^#/.test(href) ? "direct" : "js",
+          name: text.slice(0, 200),
+          href: href.slice(0, 1000),
+          onclick: onclick.slice(0, 500),
+          idx,
+        });
+      });
+      return result;
+    }).catch(() => []);
+    for (const b of batch) {
+      // 이름+href/onclick로 de-dup
+      const id = `${b.kind}|${b.name}|${b.href}|${b.onclick}`;
+      if (seen.has(id)) continue;
+      seen.set(id, true);
+      out.push({
+        id: String(out.length),          // 순번 id — UI/client 사용
+        name: b.name,
+        kind: b.kind,
+        href: b.href || null,
+        onclick: b.onclick || null,
+        frameUrl: frame.url().slice(0, 200),
+      });
+    }
+  }
+  return out;
+}
+
+// Returns { buffer, filename, contentType } for a single attachment descriptor.
+// Uses page.on('download') so both JS-triggered and direct-link clicks funnel
+// through the same Playwright download pipeline — no need for a separate
+// fetch() path.
+async function triggerDownload(page, attachment) {
+  // Locate the anchor in any frame. We use href+onclick+text as the fingerprint.
+  for (const frame of page.frames()) {
+    const ok = await frame.evaluate((meta) => {
+      const anchors = document.querySelectorAll("a");
+      for (const a of anchors) {
+        const href = a.getAttribute("href") || "";
+        const onclick = a.getAttribute("onclick") || "";
+        const text = (a.textContent || "").trim();
+        if (text === meta.name && href === meta.href && onclick === meta.onclick) {
+          a.scrollIntoView({ block: "center" });
+          return true;
+        }
+      }
+      return false;
+    }, attachment).catch(() => false);
+    if (!ok) continue;
+
+    const downloadPromise = page.waitForEvent("download", { timeout: 20000 }).catch(() => null);
+    await frame.evaluate((meta) => {
+      for (const a of document.querySelectorAll("a")) {
+        if ((a.textContent || "").trim() === meta.name) { a.click(); return; }
+      }
+    }, attachment).catch(() => {});
+    const dl = await downloadPromise;
+    if (dl) {
+      const stream = await dl.createReadStream();
+      const chunks = [];
+      await new Promise((resolve, reject) => {
+        stream.on("data", (c) => chunks.push(c));
+        stream.on("end", resolve);
+        stream.on("error", reject);
+      });
+      const buffer = Buffer.concat(chunks);
+      return {
+        buffer,
+        filename: dl.suggestedFilename() || attachment.name,
+        contentType: "application/octet-stream",
+      };
+    }
+    // JS click이 새 탭 navigation으로 끝나는 사이트도 있음 — 현재 URL이 파일이면 스트림
+    break;
+  }
+  throw new Error("DOWNLOAD_FAILED");
 }
 
 // ── 진단 모드: 페이지 내부 상태 전부 덤프 ─────────────────
@@ -1225,7 +1497,169 @@ app.get("/api/health", (req, res) => {
     inFlight: _inFlight.size,
     aiProvider: AI_PROVIDER,
     uptimeSec: Math.round(process.uptime()),
+    downloadActive: downloadPool.active,
+    downloadQueued: downloadPool.queued,
+    downloadConcurrency: downloadPool.limit,
+    detailCacheSize: detailCache.size,
+    attachCacheSize: attachCache.size,
+    attachCacheBytes: attachCache.bytes,
+    attachCacheMaxBytes: attachCache.maxBytes,
+    kdsisBlockCount15m: currentBlockCount(),
   });
+});
+
+// ── 첨부 프록시 API ───────────────────────────────────────
+//
+// /api/detail?params=<JSON>&key=<rowKey>
+//   Returns { attachments: [{ id, name, kind, ... }] }. Opens the detail
+//   popup for the row identified by <key> (usually 규격번호) and scrapes
+//   attachment metadata out of every frame. Cached by (params, key).
+//
+// /api/attachment?params=<JSON>&key=<rowKey>&id=<attachmentId>
+//   Streams the file bytes back with Content-Disposition. Clicks the
+//   attachment's link inside Playwright (covers direct href + JS trigger
+//   cases uniformly via page.on('download')).
+//
+// Both endpoints:
+//   - per-IP rate limited (10/min default)
+//   - share a concurrency-bounded Playwright pool (2 default), separate
+//     from the search serial queue so downloads don't block searches
+//   - each request opens a fresh context, no cross-request session state
+
+function _clientIp(req) {
+  const xff = (req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return xff || req.socket?.remoteAddress || "unknown";
+}
+
+function _parseParamsQuery(raw) {
+  if (!raw) return null;
+  try {
+    const p = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return p && typeof p === "object" ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+async function _enforceRateLimit(req, res) {
+  const ip = _clientIp(req);
+  const check = downloadRateLimiter.check(ip);
+  if (!check.allowed) {
+    const retryAfter = Math.ceil(check.retryAfterMs / 1000);
+    res.setHeader("Retry-After", String(retryAfter));
+    res.status(429).json({
+      error: "Too Many Requests",
+      retryAfterSec: retryAfter,
+      limit: downloadRateLimiter.max,
+      windowMs: downloadRateLimiter.windowMs,
+    });
+    return false;
+  }
+  return true;
+}
+
+app.get("/api/detail", async (req, res) => {
+  if (!(await _enforceRateLimit(req, res))) return;
+
+  const params = _parseParamsQuery(req.query.params);
+  const rowKey = typeof req.query.key === "string" ? req.query.key : "";
+  if (!params || !rowKey) {
+    return res.status(400).json({ error: "params(JSON)과 key(문자열)이 모두 필요합니다." });
+  }
+
+  const cacheK = `${cacheKey(params)}|${rowKey}`;
+  const cached = detailCache.get(cacheK);
+  if (cached) return res.json({ ...cached, __cached: true });
+
+  try {
+    const result = await downloadPool.run(async () => {
+      const { context, page } = await openRowDetail({ params, rowKey });
+      try {
+        const attachments = await extractAttachments(page);
+        return { attachments, rowKey };
+      } finally {
+        try { await context.close(); } catch {}
+      }
+    });
+    detailCache.set(cacheK, result);
+    res.json(result);
+  } catch (err) {
+    const msg = err.message || String(err);
+    if (msg === "KDSIS_BLOCKED") {
+      res.setHeader("Retry-After", "60");
+      return res.status(503).json({ error: "KDSIS가 현재 요청을 차단하고 있습니다. 잠시 후 다시 시도해 주세요." });
+    }
+    if (msg === "ROW_NOT_FOUND") {
+      return res.status(404).json({ error: `해당 규격(${rowKey})을 결과에서 찾지 못했습니다.` });
+    }
+    console.error("[/api/detail]", msg);
+    res.status(500).json({ error: msg });
+  }
+});
+
+app.get("/api/attachment", async (req, res) => {
+  if (!(await _enforceRateLimit(req, res))) return;
+
+  const params = _parseParamsQuery(req.query.params);
+  const rowKey = typeof req.query.key === "string" ? req.query.key : "";
+  const attachId = typeof req.query.id === "string" ? req.query.id : "";
+  if (!params || !rowKey || !attachId) {
+    return res.status(400).json({ error: "params, key, id가 모두 필요합니다." });
+  }
+
+  const bytesKey = `${cacheKey(params)}|${rowKey}|${attachId}`;
+  const cachedBytes = attachCache.get(bytesKey);
+  if (cachedBytes) {
+    res.setHeader("Content-Type", cachedBytes.contentType || "application/octet-stream");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(cachedBytes.filename || "download")}`
+    );
+    return res.end(cachedBytes.buffer);
+  }
+
+  try {
+    const file = await downloadPool.run(async () => {
+      // 첨부 메타를 먼저 확보 (캐시 우선).
+      const metaKey = `${cacheKey(params)}|${rowKey}`;
+      let meta = detailCache.get(metaKey);
+      const { context, page } = await openRowDetail({ params, rowKey });
+      try {
+        if (!meta) {
+          const attachments = await extractAttachments(page);
+          meta = { attachments, rowKey };
+          detailCache.set(metaKey, meta);
+        }
+        const attachment = meta.attachments.find((a) => a.id === attachId);
+        if (!attachment) throw new Error("ATTACHMENT_NOT_FOUND");
+        const dl = await triggerDownload(page, attachment);
+        return dl;
+      } finally {
+        try { await context.close(); } catch {}
+      }
+    });
+
+    // 캐시 저장 (단건이 상한 넘으면 자동 skip).
+    attachCache.set(bytesKey, file, file.buffer.length);
+
+    res.setHeader("Content-Type", file.contentType || "application/octet-stream");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(file.filename || "download")}`
+    );
+    res.end(file.buffer);
+  } catch (err) {
+    const msg = err.message || String(err);
+    if (msg === "KDSIS_BLOCKED") {
+      res.setHeader("Retry-After", "60");
+      return res.status(503).json({ error: "KDSIS가 요청을 차단했습니다." });
+    }
+    if (msg === "ATTACHMENT_NOT_FOUND" || msg === "ROW_NOT_FOUND") {
+      return res.status(404).json({ error: msg });
+    }
+    console.error("[/api/attachment]", msg);
+    res.status(500).json({ error: msg });
+  }
 });
 
 // ── Graceful shutdown ───────────────────────────────────

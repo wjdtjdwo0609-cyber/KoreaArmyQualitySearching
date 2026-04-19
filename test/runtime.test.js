@@ -15,6 +15,7 @@ const {
   auditResults,
   createRateLimiter,
   createByteBoundedCache,
+  createConcurrentQueue,
 } = require("../lib/runtime");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -376,4 +377,50 @@ test("byteCache: delete reclaims bytes", () => {
   c.delete("a");
   assert.equal(c.bytes, 200);
   assert.equal(c.size, 1);
+});
+
+// ── createConcurrentQueue ──────────────────────────────────
+
+test("concurrentQueue: respects concurrency limit", async () => {
+  const q = createConcurrentQueue(2);
+  let peak = 0, inflight = 0;
+  const task = async () => {
+    inflight++; peak = Math.max(peak, inflight);
+    await sleep(30);
+    inflight--;
+  };
+  await Promise.all([q.run(task), q.run(task), q.run(task), q.run(task)]);
+  assert.equal(peak, 2);
+});
+
+test("concurrentQueue: returns task result and surfaces rejection", async () => {
+  const q = createConcurrentQueue(1);
+  assert.equal(await q.run(async () => 42), 42);
+  await assert.rejects(q.run(async () => { throw new Error("x"); }), /x/);
+});
+
+test("concurrentQueue: one task's rejection doesn't stall others", async () => {
+  const q = createConcurrentQueue(1);
+  const p1 = q.run(async () => { throw new Error("boom"); });
+  const p2 = q.run(async () => "ok");
+  await p1.catch(() => {});
+  assert.equal(await p2, "ok");
+});
+
+test("concurrentQueue: active/queued counters track state", async () => {
+  const q = createConcurrentQueue(1);
+  let release;
+  const blocked = q.run(() => new Promise((r) => { release = r; }));
+  // Wait a tick for scheduler to promote the first task to active
+  await Promise.resolve(); await Promise.resolve();
+  q.run(async () => "later");
+  assert.equal(q.active, 1);
+  assert.equal(q.queued, 1);
+  release();
+  await blocked;
+});
+
+test("concurrentQueue: n<1 normalizes to 1", async () => {
+  const q = createConcurrentQueue(0);
+  assert.equal(q.limit, 1);
 });
