@@ -389,9 +389,12 @@ async function _runSearchOnce(params) {
     const page = await context.newPage();
 
     // 1) KDSIS 페이지 로드
+    //    networkidle은 쓰지 않는다 — WebSquare가 long-poll / 주기 XHR을
+    //    계속 열고 있어서 idle이 영영 안 오는 경우가 있다. DOM만 준비되면
+    //    아래의 waitForSelector가 실제 폼 가용성을 보장한다.
     console.log("[KDSIS] 페이지 로딩 중...");
     await page.goto(KDSIS_URL, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
       timeout: 30000,
     });
 
@@ -669,7 +672,7 @@ async function diagnosticSearch(params) {
       if (msg.type() === "error") consoleErrors.push("console.error: " + msg.text());
     });
 
-    await page.goto(KDSIS_URL, { waitUntil: "networkidle", timeout: 30000 });
+    await page.goto(KDSIS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(2000);
     diag.pageLoaded = true;
     diag.currentUrl = page.url();
@@ -1025,7 +1028,7 @@ app.post("/api/debug/detail", async (req, res) => {
     });
     const page = await context.newPage();
 
-    await page.goto(KDSIS_URL, { waitUntil: "networkidle", timeout: 30000 });
+    await page.goto(KDSIS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(2000);
 
     // 검색 실행
