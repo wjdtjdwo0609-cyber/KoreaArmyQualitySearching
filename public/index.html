@@ -181,6 +181,8 @@
     .attach-load-btn{background:transparent;border:1px solid var(--border);border-radius:var(--r-sm);color:var(--primary);font-size:.8125rem;font-weight:500;padding:.375rem .625rem;cursor:pointer;transition:background .15s}
     .attach-load-btn:hover:not(:disabled){background:var(--primary-row)}
     .attach-load-btn:disabled{opacity:.6;cursor:progress}
+    .attach-load-btn.attach-none{color:var(--muted);cursor:default;opacity:.75}
+    .attach-load-btn.attach-none:disabled{cursor:default}
     .attach-panel{margin-top:.5rem;font-size:.8125rem}
     .attach-loading,.attach-empty{color:var(--muted);padding:.375rem .25rem}
     .attach-err{color:var(--error);padding:.375rem .5rem;background:var(--error-tint);border:1px solid var(--error-border);border-radius:var(--r-sm)}
@@ -1486,6 +1488,9 @@ function addResultMessage(data) {
   }
 
   addBotMessage(html, { skipPersist: true });
+  // Fire cache-only attachment prechecks so already-inspected rows show
+  // "첨부 N개" / "첨부 없음" without requiring another click.
+  precheckAttachmentsDom(document.getElementById(uid + "-cards"));
   // Persist structured payload so we can re-render after reload without re-fetching
   pushEvent({
     type: "result",
@@ -1550,7 +1555,11 @@ function rerender(uid) {
 
   const cardsEl = document.getElementById(uid + "-cards");
   const tableWrap = document.getElementById(uid + "-table");
-  if (cardsEl) cardsEl.innerHTML = renderCardsHtml(data, slice, terms);
+  if (cardsEl) {
+    cardsEl.innerHTML = renderCardsHtml(data, slice, terms);
+    // re-run precheck since fresh DOM nodes reset dataset.precheck
+    precheckAttachmentsDom(cardsEl);
+  }
   if (tableWrap) tableWrap.innerHTML = renderTableHtml(data, slice, terms, sort);
 
   const pgnEl = document.getElementById(uid + "-pagination");
@@ -1799,15 +1808,67 @@ async function handleClickDelegated(e) {
           panel.innerHTML = `<div class="attach-chips">${chips}</div>`;
         }
         block.dataset.loaded = "1";
+        block.dataset.count = String(list.length);
       }
     } catch (err) {
       panel.innerHTML = `<div class="attach-err">네트워크 오류: ${esc(err.message || err)}</div>`;
     } finally {
       attachBtn.disabled = false;
-      attachBtn.textContent = prevLabel;
+      // Loaded buttons reflect result; unloaded/errored revert to prior label
+      if (block.dataset.loaded === "1") {
+        setAttachBtnLabelFromCount(block, Number(block.dataset.count || 0));
+      } else {
+        attachBtn.textContent = prevLabel;
+      }
     }
     return;
   }
+}
+
+// Updates a .attach-block's button to reflect the known attachment count.
+// count === 0 → "📎 첨부 없음" (disabled, muted); count > 0 → "📎 첨부 N개".
+function setAttachBtnLabelFromCount(block, count) {
+  const btn = block.querySelector(".attach-load-btn");
+  if (!btn) return;
+  if (count === 0) {
+    btn.textContent = "📎 첨부 없음";
+    btn.classList.add("attach-none");
+    btn.disabled = true;
+    btn.setAttribute("aria-expanded", "false");
+  } else {
+    btn.textContent = `📎 첨부 ${count}개`;
+    btn.classList.remove("attach-none");
+  }
+}
+
+// Fire cache-only probes for every .attach-block under `root` in parallel.
+// The /api/detail/cached endpoint is cheap (Map lookup, no Playwright, no
+// rate-limit), so even a 100-row page costs one round trip total. Blocks
+// with a cache miss are left alone — button stays "📎 첨부파일 보기".
+async function precheckAttachmentsDom(root) {
+  if (!root) return;
+  const blocks = root.querySelectorAll(".attach-block");
+  if (!blocks.length) return;
+  await Promise.all(
+    Array.from(blocks).map(async (block) => {
+      if (block.dataset.loaded === "1" || block.dataset.precheck === "1") return;
+      block.dataset.precheck = "1";
+      const spec = block.dataset.spec;
+      const paramsJson = block.dataset.params;
+      if (!spec || !paramsJson) return;
+      try {
+        const qs = new URLSearchParams({ params: paramsJson, key: spec }).toString();
+        const res = await fetch(`/api/detail/cached?${qs}`);
+        if (!res.ok) return;
+        const body = await res.json();
+        if (body && body.cached) {
+          block.dataset.loaded = "1";
+          block.dataset.count = String(body.count);
+          setAttachBtnLabelFromCount(block, body.count);
+        }
+      } catch { /* silent — precheck is best-effort */ }
+    })
+  );
 }
 messages.addEventListener("click", handleClickDelegated);
 
