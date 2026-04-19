@@ -175,12 +175,30 @@ async function clickSearchButton(page, { timeout = 10000 } = {}) {
     }
     await page.waitForTimeout(250);
   }
+  // 타임아웃 순간의 DOM 스냅샷 — "어떤 셀렉터를 시도했는지"만으로는
+  // 폼 자체가 비어있었는지 / 버튼만 다른 id로 렌더됐는지 구분이 안 된다.
+  const diagnostics = await page.evaluate((fieldIds) => {
+    const btnIds = [];
+    document.querySelectorAll('[id^="btn_"], [id*="earch"]').forEach((el) => {
+      if (el.id && btnIds.length < 20) btnIds.push(el.id);
+    });
+    const presentFields = fieldIds.filter((id) => !!document.getElementById(id));
+    return {
+      url: location.href,
+      title: document.title,
+      btnIds,
+      fieldsPresent: presentFields.length,
+      fieldsTotal: fieldIds.length,
+    };
+  }, Object.values(FIELD_MAP).map((c) => c.id)).catch(() => ({ error: "diagnostics evaluate failed" }));
+
   const err = new Error(
     `검색 버튼을 찾지 못했습니다. 시도한 셀렉터: ${SEARCH_BUTTON_SELECTORS.join(", ")}${
       lastErr ? ` (마지막 에러: ${lastErr.message})` : ""
     }`
   );
-  err.tried = tried;
+  err.tried = SEARCH_BUTTON_SELECTORS;
+  err.diagnostics = diagnostics;
   throw err;
 }
 
@@ -1650,7 +1668,9 @@ app.get("/api/detail", async (req, res) => {
       return res.status(404).json({ error: `해당 규격(${rowKey})을 결과에서 찾지 못했습니다.` });
     }
     console.error("[/api/detail]", msg);
-    res.status(500).json({ error: msg });
+    const body = { error: msg };
+    if (err.diagnostics) body.diagnostics = err.diagnostics;
+    res.status(500).json(body);
   }
 });
 

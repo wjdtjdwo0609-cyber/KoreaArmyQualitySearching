@@ -184,6 +184,9 @@
     .attach-panel{margin-top:.5rem;font-size:.8125rem}
     .attach-loading,.attach-empty{color:var(--muted);padding:.375rem .25rem}
     .attach-err{color:var(--error);padding:.375rem .5rem;background:var(--error-tint);border:1px solid var(--error-border);border-radius:var(--r-sm)}
+    .attach-diag{margin-top:.375rem;font-size:.75rem}
+    .attach-diag summary{cursor:pointer;color:var(--error);user-select:none}
+    .attach-diag pre{font-family:var(--mono);font-size:.7rem;white-space:pre-wrap;word-break:break-word;margin:.25rem 0 0;padding:.375rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text);max-height:180px;overflow:auto}
     .attach-chips{display:flex;flex-wrap:wrap;gap:.375rem}
     .attach-chip{display:inline-flex;align-items:center;gap:.25rem;max-width:100%;padding:.375rem .625rem;background:var(--primary-row);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text);text-decoration:none;font-size:.8125rem;word-break:break-all}
     .attach-chip:hover{background:var(--primary-tint);border-color:var(--primary)}
@@ -1769,8 +1772,17 @@ async function handleClickDelegated(e) {
         panel.innerHTML = `<div class="attach-err">KDSIS가 일시적으로 차단했습니다. 잠시 뒤 재시도하세요.</div>`;
         toast("KDSIS 접속이 일시 차단되었습니다", "error");
       } else if (!res.ok) {
-        const txt = (await res.text()).slice(0, 200);
-        panel.innerHTML = `<div class="attach-err">상세 조회 실패 (HTTP ${res.status}) — ${esc(txt)}</div>`;
+        const raw = await res.text();
+        let parsed = null;
+        try { parsed = JSON.parse(raw); } catch {}
+        const msg = parsed?.error || raw.slice(0, 200);
+        let html = `<div class="attach-err">상세 조회 실패 (HTTP ${res.status}) — ${esc(msg)}`;
+        if (parsed && parsed.diagnostics) {
+          const diag = JSON.stringify(parsed.diagnostics, null, 2);
+          html += `<details class="attach-diag"><summary>진단 정보</summary><pre>${esc(diag)}</pre></details>`;
+        }
+        html += `</div>`;
+        panel.innerHTML = html;
       } else {
         const data = await res.json();
         const list = Array.isArray(data.attachments) ? data.attachments : [];
