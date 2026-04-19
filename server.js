@@ -1651,6 +1651,20 @@ async function _enforceRateLimit(req, res) {
   return true;
 }
 
+// Cache-only probe. Returns {cached: true, count} if the (params, rowKey) pair
+// is in detailCache, else {cached: false}. No Playwright, no rate-limit — used
+// by the UI to opportunistically label cards on render ("첨부 N개" / "첨부 없음")
+// without clicking anything. GET so it's trivially batchable in parallel.
+app.get("/api/detail/cached", (req, res) => {
+  const params = _parseParamsQuery(req.query.params);
+  const rowKey = typeof req.query.key === "string" ? req.query.key : "";
+  if (!params || !rowKey) return res.json({ cached: false });
+  const entry = detailCache.get(`${cacheKey(params)}|${rowKey}`);
+  if (!entry) return res.json({ cached: false });
+  const count = Array.isArray(entry.attachments) ? entry.attachments.length : 0;
+  res.json({ cached: true, count });
+});
+
 app.get("/api/detail", async (req, res) => {
   if (!(await _enforceRateLimit(req, res))) return;
 
