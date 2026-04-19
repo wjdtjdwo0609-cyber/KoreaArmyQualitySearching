@@ -156,21 +156,29 @@ const SEARCH_BUTTON_SELECTORS = [
   'button:has-text("검색")',
 ];
 
-async function clickSearchButton(page) {
-  const tried = [];
-  for (const sel of SEARCH_BUTTON_SELECTORS) {
-    tried.push(sel);
-    try {
-      const el = await page.$(sel);
-      if (!el) continue;
-      await page.click(sel);
-      return { clicked: sel, tried };
-    } catch (_) {
-      // 다음 후보 시도
+async function clickSearchButton(page, { timeout = 10000 } = {}) {
+  // WebSquare가 버튼을 JS로 나중에 붙이는 경우가 있어, 즉시 $()로 조회하면
+  // 초기화가 끝나기 전에 실패한다. 250ms 간격으로 deadline까지 폴링하며
+  // 최초로 DOM에 붙은 후보를 클릭.
+  const deadline = Date.now() + timeout;
+  let lastErr = null;
+  while (Date.now() < deadline) {
+    for (const sel of SEARCH_BUTTON_SELECTORS) {
+      try {
+        const el = await page.$(sel);
+        if (!el) continue;
+        await page.click(sel);
+        return { clicked: sel, tried: SEARCH_BUTTON_SELECTORS };
+      } catch (e) {
+        lastErr = e;
+      }
     }
+    await page.waitForTimeout(250);
   }
   const err = new Error(
-    `검색 버튼을 찾지 못했습니다. 시도한 셀렉터: ${tried.join(", ")}`
+    `검색 버튼을 찾지 못했습니다. 시도한 셀렉터: ${SEARCH_BUTTON_SELECTORS.join(", ")}${
+      lastErr ? ` (마지막 에러: ${lastErr.message})` : ""
+    }`
   );
   err.tried = tried;
   throw err;
