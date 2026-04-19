@@ -13,6 +13,8 @@ const {
   isTransient,
   expandHeaderCells,
   auditResults,
+  createRateLimiter,
+  createByteBoundedCache,
 } = require("../lib/runtime");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -285,4 +287,93 @@ test("auditResults: missing data defaults to empty result set", () => {
   assert.deepEqual(out.rows, []);
   assert.deepEqual(out.columns, []);
   assert.deepEqual(out.warnings, []);
+});
+
+// ── createRateLimiter ──────────────────────────────────────
+
+test("rateLimiter: allows up to max within window", () => {
+  const rl = createRateLimiter({ windowMs: 1000, max: 3 });
+  assert.equal(rl.check("ip").allowed, true);
+  assert.equal(rl.check("ip").allowed, true);
+  assert.equal(rl.check("ip").allowed, true);
+  const denied = rl.check("ip");
+  assert.equal(denied.allowed, false);
+  assert.ok(denied.retryAfterMs > 0);
+  assert.ok(denied.retryAfterMs <= 1000);
+});
+
+test("rateLimiter: separate keys do not share budget", () => {
+  const rl = createRateLimiter({ windowMs: 1000, max: 1 });
+  assert.equal(rl.check("a").allowed, true);
+  assert.equal(rl.check("b").allowed, true);
+  assert.equal(rl.check("a").allowed, false);
+  assert.equal(rl.check("b").allowed, false);
+});
+
+test("rateLimiter: window slides as old hits expire", async () => {
+  const rl = createRateLimiter({ windowMs: 80, max: 2 });
+  rl.check("k"); rl.check("k");
+  assert.equal(rl.check("k").allowed, false);
+  await sleep(120);
+  assert.equal(rl.check("k").allowed, true);
+});
+
+test("rateLimiter: reset wipes a single key", () => {
+  const rl = createRateLimiter({ windowMs: 10_000, max: 1 });
+  rl.check("k");
+  assert.equal(rl.check("k").allowed, false);
+  rl.reset("k");
+  assert.equal(rl.check("k").allowed, true);
+});
+
+// ── createByteBoundedCache ─────────────────────────────────
+
+test("byteCache: get/set with byte tracking", () => {
+  const c = createByteBoundedCache({ ttlMs: 10_000, maxEntries: 10, maxBytes: 1000 });
+  assert.equal(c.set("a", "one", 100), true);
+  assert.equal(c.bytes, 100);
+  assert.equal(c.get("a"), "one");
+});
+
+test("byteCache: evicts oldest to fit new entry under maxBytes", () => {
+  const c = createByteBoundedCache({ ttlMs: 10_000, maxEntries: 10, maxBytes: 200 });
+  c.set("a", "x", 100);
+  c.set("b", "y", 90);
+  c.set("c", "z", 50); // forces eviction; total 240 → drop a (oldest) to fit
+  assert.equal(c.get("a"), null);
+  assert.equal(c.get("b"), "y");
+  assert.equal(c.get("c"), "z");
+  assert.ok(c.bytes <= 200);
+});
+
+test("byteCache: single entry exceeding maxBytes is rejected", () => {
+  const c = createByteBoundedCache({ ttlMs: 10_000, maxEntries: 10, maxBytes: 100 });
+  assert.equal(c.set("big", "X", 200), false);
+  assert.equal(c.get("big"), null);
+  assert.equal(c.bytes, 0);
+});
+
+test("byteCache: re-set updates bytes and LRU position", () => {
+  const c = createByteBoundedCache({ ttlMs: 10_000, maxEntries: 10, maxBytes: 1000 });
+  c.set("a", "v1", 100);
+  c.set("a", "v2", 50);
+  assert.equal(c.get("a"), "v2");
+  assert.equal(c.bytes, 50);
+});
+
+test("byteCache: TTL expiry clears bytes", async () => {
+  const c = createByteBoundedCache({ ttlMs: 80, maxEntries: 10, maxBytes: 1000 });
+  c.set("a", "x", 100);
+  await sleep(120);
+  assert.equal(c.get("a"), null);
+  assert.equal(c.bytes, 0);
+});
+
+test("byteCache: delete reclaims bytes", () => {
+  const c = createByteBoundedCache({ ttlMs: 10_000, maxEntries: 10, maxBytes: 1000 });
+  c.set("a", "x", 100);
+  c.set("b", "y", 200);
+  c.delete("a");
+  assert.equal(c.bytes, 200);
+  assert.equal(c.size, 1);
 });
