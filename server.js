@@ -855,6 +855,29 @@ async function openRowDetail({ params, rowKey }) {
   }
 }
 
+// openRowDetail 래퍼: 메인 검색 경로(_runSearch)와 동일하게 transient 에러에
+// 한해 한 번 재시도한다. ROW_NOT_FOUND / KDSIS_BLOCKED 는 사실관계 에러이므로
+// 재시도 가치가 없어 즉시 전달. Download pool 슬롯을 추가로 점유하지 않도록
+// 호출은 pool 내부에서 하고, 재시도도 같은 슬롯 안에서 순차 실행한다.
+const DETAIL_RETRIES = 1;
+async function openRowDetailWithRetry({ params, rowKey }) {
+  let lastErr;
+  for (let attempt = 0; attempt <= DETAIL_RETRIES; attempt++) {
+    try {
+      return await openRowDetail({ params, rowKey });
+    } catch (err) {
+      lastErr = err;
+      const msg = err && err.message ? err.message : String(err);
+      if (msg === "ROW_NOT_FOUND" || msg === "KDSIS_BLOCKED") throw err;
+      if (attempt >= DETAIL_RETRIES) throw err;
+      if (!(isTransient(msg) || msg === "KDSIS_FORM_NOT_READY")) throw err;
+      console.warn(`[detail-retry ${attempt + 1}/${DETAIL_RETRIES}] ${msg}`);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  throw lastErr;
+}
+
 // 상세 페이지(+ 서브프레임)에서 첨부 후보를 긁어온다. 반환 형태:
 //   { name, kind: "direct"|"js", id, href?, onclick?, frameUrl }
 // 직링크(A/B)와 JS 트리거(C)를 모두 수용. UI는 kind 무관하게 같은 URL을 쓰고,
@@ -1607,7 +1630,7 @@ app.get("/api/detail", async (req, res) => {
 
   try {
     const result = await downloadPool.run(async () => {
-      const { context, page } = await openRowDetail({ params, rowKey });
+      const { context, page } = await openRowDetailWithRetry({ params, rowKey });
       try {
         const attachments = await extractAttachments(page);
         return { attachments, rowKey };
@@ -1657,7 +1680,7 @@ app.get("/api/attachment", async (req, res) => {
       // 첨부 메타를 먼저 확보 (캐시 우선).
       const metaKey = `${cacheKey(params)}|${rowKey}`;
       let meta = detailCache.get(metaKey);
-      const { context, page } = await openRowDetail({ params, rowKey });
+      const { context, page } = await openRowDetailWithRetry({ params, rowKey });
       try {
         if (!meta) {
           const attachments = await extractAttachments(page);
