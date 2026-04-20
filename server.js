@@ -158,10 +158,15 @@ const SEARCH_BUTTON_SELECTORS = [
   'button:has-text("검색")',
 ];
 
-// KDSIS가 결과 그리드 id를 ggr_stndList → ggr_exelSearchList 로 리네임한 전례
-// 있음. 하드코딩 하지 말고 페이지에서 존재하는 첫 후보를 런타임에 고른다.
-// 새 id 먼저, 옛 id는 혹시 옛 화면으로 돌아갈 때 대비한 폴백.
-const GRID_ID_CANDIDATES = ["ggr_exelSearchList", "ggr_stndList"];
+// KDSIS가 결과 그리드 id를 바꾼 전례가 있어 하드코딩하지 않고 후보 리스트에서
+// 런타임에 고른다. 운영 관찰상 실제 검색 결과는 ggr_stndList에 들어가고,
+// ggr_exelSearchList는 "엑셀다운로드" 용 보조 그리드로 보인다. 따라서 실제
+// 데이터가 있는 grid를 우선 고르고, 없으면 tbody가 존재하는 첫 후보로 폴백.
+const GRID_ID_CANDIDATES = ["ggr_stndList", "ggr_exelSearchList"];
+// 후보 중 실제로 행이 있는 grid를 우선 고른다. page.evaluate 안에서
+// `eval(PICK_GRID_ID)(gridIds)` 형태로 쓰도록 문자열 템플릿 대신 해당 함수
+// 로직을 각 evaluate에서 인라인한다 — Playwright가 콜백 본문만 직렬화하므로
+// 외부 참조가 남으면 ReferenceError가 된다.
 
 async function clickSearchButton(page, { timeout = 10000 } = {}) {
   // WebSquare가 버튼을 JS로 나중에 붙이는 경우가 있어, 즉시 $()로 조회하면
@@ -315,12 +320,32 @@ async function fillSearchForm(page, params) {
     try {
       await page.waitForSelector(sel, { timeout: 5000 });
       if (config.type === "text") {
+        // WebSquare w2input은 자체 이벤트 파이프라인으로 값을 바인딩하는데,
+        // page.fill만으로는 focus → keydown/keyup → change 시퀀스가 부족해
+        // 내부 모델에 값이 반영되지 않는 경우가 관찰됐다(검색 시 필터 없이
+        // 제출되어 0건 또는 전체 결과가 나오는 증상). focus → clear → type →
+        // blur로 실제 사용자 타이핑을 재현하고, 추가로 JS로 value 를 직접
+        // 세팅한 뒤 input/change 이벤트를 dispatch — 어느 한쪽이 막혀도
+        // 다른 쪽이 반영되도록 이중 안전장치.
+        await page.focus(sel);
         await page.fill(sel, "");
-        await page.fill(sel, value);
+        await page.type(sel, String(value), { delay: 20 });
+        await page.evaluate(
+          ({ s, v }) => {
+            const el = document.querySelector(s);
+            if (!el) return;
+            el.value = v;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+          },
+          { s: sel, v: String(value) }
+        );
+        await page.keyboard.press("Tab").catch(() => {});
       } else {
         await page.selectOption(sel, { label: value });
+        await page.dispatchEvent(sel, "change");
       }
-      await page.dispatchEvent(sel, "change");
     } catch (err) {
       console.warn(`[KDSIS] 폼 입력 실패 (${fieldName}):`, err.message);
     }
