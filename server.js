@@ -18,6 +18,8 @@
 
 const express = require("express");
 const { chromium } = require("playwright");
+const https = require("https");
+const { URL } = require("url");
 const path = require("path");
 const {
   cacheKey,
@@ -1396,6 +1398,76 @@ app.post("/api/search/direct", async (req, res) => {
   }
 });
 
+// GET /api/debug/raw — Playwright를 거치지 않고 node https로 KDSIS를 직접 호출.
+// 목적: Render 서버 IP → KDSIS 네트워크 레이어만 격리해서 본다 (IP 차단 판별).
+// 쉘 접근이 없어도 브라우저 주소창에서 바로 결과를 얻을 수 있도록 JSON으로 반환.
+app.get("/api/debug/raw", async (req, res) => {
+  const target = typeof req.query.url === "string" && req.query.url.startsWith("http")
+    ? req.query.url
+    : KDSIS_URL;
+  const ua =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+  const started = Date.now();
+
+  const result = await new Promise((resolve) => {
+    try {
+      const u = new URL(target);
+      const req2 = https.request(
+        {
+          method: "GET",
+          hostname: u.hostname,
+          port: u.port || 443,
+          path: u.pathname + u.search,
+          headers: {
+            "User-Agent": ua,
+            Referer: "https://kdsis.dapa.go.kr/",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+          },
+          timeout: 15000,
+        },
+        (r) => {
+          const chunks = [];
+          let size = 0;
+          r.on("data", (c) => {
+            chunks.push(c);
+            size += c.length;
+            if (size > 200_000) r.destroy(); // bodyPreview로 쓸 선두만 있으면 됨
+          });
+          r.on("end", () => {
+            const body = Buffer.concat(chunks).toString("utf8");
+            resolve({
+              ok: true,
+              httpStatus: r.statusCode,
+              statusMessage: r.statusMessage,
+              headers: r.headers,
+              sizeSampled: size,
+              bodyPreview: body.slice(0, 500),
+              bodyLooksEmpty: body.trim().length < 30,
+              elapsedMs: Date.now() - started,
+            });
+          });
+          r.on("error", (err) =>
+            resolve({ ok: false, stage: "response", error: String(err), elapsedMs: Date.now() - started })
+          );
+        }
+      );
+      req2.on("timeout", () => {
+        req2.destroy();
+        resolve({ ok: false, stage: "timeout", elapsedMs: Date.now() - started });
+      });
+      req2.on("error", (err) =>
+        resolve({ ok: false, stage: "request", error: String(err), elapsedMs: Date.now() - started })
+      );
+      req2.end();
+    } catch (err) {
+      resolve({ ok: false, stage: "setup", error: String(err) });
+    }
+  });
+
+  res.json({ target, userAgent: ua, ...result });
+});
+
 // GET/POST /api/debug — 진단 모드 (내부 상태 전부 덤프)
 //   GET:  기본 테스트 쿼리 (규격상태=활성)로 자동 실행
 //   POST: { params: {...} } 로 커스텀 쿼리 지정 가능
@@ -1838,6 +1910,7 @@ app.listen(PORT, () => {
   ║  POST /api/search/direct — 필드 직접 지정     ║
   ║  GET  /api/health      — 상태 확인             ║
   ║  GET  /api/debug       — 진단 모드 (덤프)     ║
+  ║  GET  /api/debug/raw   — 원시 fetch (IP 확인) ║
   ║  GET  /api/screenshot  — 마지막 검색 캡처     ║
   ╚═══════════════════════════════════════════════╝
   `);
