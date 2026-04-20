@@ -202,6 +202,40 @@ async function clickSearchButton(page, { timeout = 10000 } = {}) {
   throw err;
 }
 
+// Shared "open KDSIS" pathway. Both the main search and the
+// detail/attachment replay flows need the same behavior:
+//   1) portal warmup so KDSIS sees a same-origin nav into the popup,
+//   2) deep-link goto with HTTP status check (403/429 → BLOCKED),
+//   3) DOM readiness wait.
+// Factored here so the two paths can't drift out of sync again.
+async function navigateToKdsis(page, { warmup = true } = {}) {
+  if (warmup) {
+    // Hit the portal root first. Establishes session cookies and — more
+    // importantly — makes the subsequent popup navigation look same-origin
+    // rather than a bare deep link. Cheap (<1s, small HTML) and swallowed
+    // silently if it fails so we don't punish already-warm contexts.
+    try {
+      await page.goto("https://kdsis.dapa.go.kr/", {
+        waitUntil: "domcontentloaded",
+        timeout: 10000,
+      });
+    } catch (err) {
+      console.warn("[KDSIS] portal warmup skipped:", err.message);
+    }
+  }
+  const response = await page.goto(KDSIS_URL, {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
+  if (response && !response.ok() && response.status() !== 304) {
+    recordBlockHit();
+    const err = new Error("KDSIS_BLOCKED");
+    err.diagnostics = { httpStatus: response.status(), url: response.url() };
+    throw err;
+  }
+  await waitForKdsisReady(page);
+}
+
 // Waits for the KDSIS search form to be fully initialized. Originally this
 // required BOTH a known field id AND a known button selector to be present,
 // but KDSIS's WebSquare wraps / re-ids some field inputs, so the field check
@@ -565,22 +599,16 @@ async function _runSearchOnce(params) {
       ignoreHTTPSErrors: true,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      extraHTTPHeaders: { Referer: "https://kdsis.dapa.go.kr/" },
     });
 
     const page = await context.newPage();
 
-    // 1) KDSIS 페이지 로드
-    //    networkidle은 쓰지 않는다 — WebSquare가 long-poll / 주기 XHR을
-    //    계속 열고 있어서 idle이 영영 안 오는 경우가 있다. DOM만 준비되면
-    //    아래의 waitForSelector가 실제 폼 가용성을 보장한다.
+    // 1) KDSIS 페이지 로드 — portal warmup → deep link → HTTP status check
+    //    → DOM 준비. networkidle은 쓰지 않는다 (WebSquare가 long-poll / 주기
+    //    XHR을 계속 열고 있어서 idle이 영영 안 오는 경우가 있다).
     console.log("[KDSIS] 페이지 로딩 중...");
-    await page.goto(KDSIS_URL, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
-
-    // WebSquare 폼 준비 대기 — 고정 슬립 대신 필드+버튼 DOM 출현을 실 대기.
-    await waitForKdsisReady(page);
+    await navigateToKdsis(page);
 
     // 2) 검색 필드 입력
     console.log("[KDSIS] 검색 조건 입력:", params);
@@ -837,17 +865,7 @@ async function openRowDetail({ params, rowKey }) {
   });
   try {
     const page = await context.newPage();
-    const response = await page.goto(KDSIS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
-    // Anti-scrape defenses commonly answer with 403 / 429 before any DOM is
-    // parsed. Catch it at the transport layer so we don't burn 20s waiting
-    // for a form that's never coming.
-    if (response && !response.ok() && response.status() !== 304) {
-      recordBlockHit();
-      const err = new Error("KDSIS_BLOCKED");
-      err.diagnostics = { httpStatus: response.status(), url: response.url() };
-      throw err;
-    }
-    await waitForKdsisReady(page);
+    await navigateToKdsis(page);
 
     // KDSIS 차단 페이지 감지 — 본문에 "접근이 거부" / "차단" / 403 표시가 있으면
     // 조기 실패시켜 호출자가 503을 돌려줄 수 있게 한다.
