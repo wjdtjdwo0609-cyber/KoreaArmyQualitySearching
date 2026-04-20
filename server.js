@@ -1468,6 +1468,111 @@ app.get("/api/debug/raw", async (req, res) => {
   res.json({ target, userAgent: ua, ...result });
 });
 
+// GET /api/debug/mini — 시간 제한된 Playwright 진단.
+// /api/debug/raw(순수 https)는 200 OK + 정상 HTML 셸을 받는데, Playwright
+// 경로는 "비어있는 body"로 BLOCKED를 내는 상황 분리용. Playwright가 KDSIS를
+// 여는 동안의 console 에러/실패 request/최종 DOM을 ~25초 안에 수집해
+// Cloudflare 100초 게이트웨이 전에 무조건 응답한다.
+app.get("/api/debug/mini", async (req, res) => {
+  const warmup = req.query.warmup !== "0"; // ?warmup=0 로 warmup 비활성 A/B
+  const overallBudgetMs = 25_000;
+  const started = Date.now();
+  let context;
+  const consoleErrors = [];
+  const failedRequests = [];
+  let navError = null;
+  let domState = null;
+
+  const withTimeout = (promise, ms, label) =>
+    Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`${label}_TIMEOUT_${ms}ms`)), ms)
+      ),
+    ]);
+
+  try {
+    const browser = await getBrowser();
+    context = await browser.newContext({
+      locale: "ko-KR",
+      ignoreHTTPSErrors: true,
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      extraHTTPHeaders: { Referer: "https://kdsis.dapa.go.kr/" },
+    });
+    const page = await context.newPage();
+
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        if (consoleErrors.length < 30) {
+          consoleErrors.push({ type: msg.type(), text: msg.text().slice(0, 300) });
+        }
+      }
+    });
+    page.on("requestfailed", (req2) => {
+      if (failedRequests.length < 30) {
+        failedRequests.push({
+          url: req2.url().slice(0, 300),
+          method: req2.method(),
+          failure: req2.failure()?.errorText || null,
+          resourceType: req2.resourceType(),
+        });
+      }
+    });
+
+    try {
+      await withTimeout(navigateToKdsis(page, { warmup }), overallBudgetMs - 3000, "NAVIGATE");
+    } catch (err) {
+      navError = {
+        message: err.message,
+        diagnostics: err.diagnostics || null,
+      };
+    }
+
+    domState = await page
+      .evaluate(
+        (fieldIds) => {
+          const btnIds = [];
+          document.querySelectorAll('[id^="btn_"], [id*="earch"]').forEach((el) => {
+            if (el.id && btnIds.length < 30) btnIds.push(el.id);
+          });
+          return {
+            url: location.href,
+            title: document.title,
+            bodyLen: (document.body?.textContent || "").length,
+            bodyPreview: (document.body?.textContent || "").slice(0, 500),
+            htmlPreview: (document.documentElement?.outerHTML || "").slice(0, 800),
+            btnIds,
+            fieldsPresent: fieldIds.filter((id) => !!document.getElementById(id)).length,
+            fieldsTotal: fieldIds.length,
+            iframes: document.querySelectorAll("iframe").length,
+            scripts: document.querySelectorAll("script").length,
+            readyState: document.readyState,
+          };
+        },
+        Object.values(FIELD_MAP).map((c) => c.id)
+      )
+      .catch((e) => ({ error: "evaluate_failed: " + e.message }));
+  } catch (err) {
+    navError = navError || { message: err.message, stage: "setup" };
+  } finally {
+    if (context) {
+      try {
+        await context.close();
+      } catch (_) {}
+    }
+  }
+
+  res.json({
+    warmup,
+    elapsedMs: Date.now() - started,
+    navError,
+    consoleErrors,
+    failedRequests,
+    domState,
+  });
+});
+
 // GET/POST /api/debug — 진단 모드 (내부 상태 전부 덤프)
 //   GET:  기본 테스트 쿼리 (규격상태=활성)로 자동 실행
 //   POST: { params: {...} } 로 커스텀 쿼리 지정 가능
@@ -1911,6 +2016,7 @@ app.listen(PORT, () => {
   ║  GET  /api/health      — 상태 확인             ║
   ║  GET  /api/debug       — 진단 모드 (덤프)     ║
   ║  GET  /api/debug/raw   — 원시 fetch (IP 확인) ║
+  ║  GET  /api/debug/mini  — Playwright 미니 진단 ║
   ║  GET  /api/screenshot  — 마지막 검색 캡처     ║
   ╚═══════════════════════════════════════════════╝
   `);
