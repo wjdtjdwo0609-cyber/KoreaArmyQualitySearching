@@ -249,10 +249,24 @@ async function navigateToKdsis(page, { warmup = true } = {}) {
 // normal title is almost always KDSIS returning a blank shell because the IP
 // was throttled / the deep link was refused, not a readiness race.
 async function waitForKdsisReady(page, { timeout = 20000 } = {}) {
-  const buttonSelectors = SEARCH_BUTTON_SELECTORS;
+  // Filter out Playwright-only selectors (e.g. `button:has-text(...)`): inside
+  // page.waitForFunction we run against the real DOM, where those throw
+  // SyntaxError on querySelector, which propagates out of .some() and
+  // immediately rejects waitForFunction — so the 20s budget never applies and
+  // we misclassify a slow-to-render WebSquare form as KDSIS_BLOCKED. Keep only
+  // standards-compliant CSS for the readiness check. Playwright-only selectors
+  // are fine in clickSearchButton() because that uses page.locator.
+  const buttonSelectors = SEARCH_BUTTON_SELECTORS.filter((s) => !s.includes(":has-text"));
   try {
     await page.waitForFunction(
-      (btns) => btns.some((s) => !!document.querySelector(s)),
+      (btns) =>
+        btns.some((s) => {
+          try {
+            return !!document.querySelector(s);
+          } catch (_) {
+            return false;
+          }
+        }),
       buttonSelectors,
       { timeout, polling: 250 }
     );
