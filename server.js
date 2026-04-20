@@ -18,6 +18,8 @@
 
 const express = require("express");
 const { chromium } = require("playwright");
+const https = require("https");
+const { URL } = require("url");
 const path = require("path");
 const {
   cacheKey,
@@ -200,6 +202,40 @@ async function clickSearchButton(page, { timeout = 10000 } = {}) {
   err.tried = SEARCH_BUTTON_SELECTORS;
   err.diagnostics = diagnostics;
   throw err;
+}
+
+// Shared "open KDSIS" pathway. Both the main search and the
+// detail/attachment replay flows need the same behavior:
+//   1) portal warmup so KDSIS sees a same-origin nav into the popup,
+//   2) deep-link goto with HTTP status check (403/429 → BLOCKED),
+//   3) DOM readiness wait.
+// Factored here so the two paths can't drift out of sync again.
+async function navigateToKdsis(page, { warmup = true } = {}) {
+  if (warmup) {
+    // Hit the portal root first. Establishes session cookies and — more
+    // importantly — makes the subsequent popup navigation look same-origin
+    // rather than a bare deep link. Cheap (<1s, small HTML) and swallowed
+    // silently if it fails so we don't punish already-warm contexts.
+    try {
+      await page.goto("https://kdsis.dapa.go.kr/", {
+        waitUntil: "domcontentloaded",
+        timeout: 10000,
+      });
+    } catch (err) {
+      console.warn("[KDSIS] portal warmup skipped:", err.message);
+    }
+  }
+  const response = await page.goto(KDSIS_URL, {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
+  if (response && !response.ok() && response.status() !== 304) {
+    recordBlockHit();
+    const err = new Error("KDSIS_BLOCKED");
+    err.diagnostics = { httpStatus: response.status(), url: response.url() };
+    throw err;
+  }
+  await waitForKdsisReady(page);
 }
 
 // Waits for the KDSIS search form to be fully initialized. Originally this
@@ -565,22 +601,16 @@ async function _runSearchOnce(params) {
       ignoreHTTPSErrors: true,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      extraHTTPHeaders: { Referer: "https://kdsis.dapa.go.kr/" },
     });
 
     const page = await context.newPage();
 
-    // 1) KDSIS 페이지 로드
-    //    networkidle은 쓰지 않는다 — WebSquare가 long-poll / 주기 XHR을
-    //    계속 열고 있어서 idle이 영영 안 오는 경우가 있다. DOM만 준비되면
-    //    아래의 waitForSelector가 실제 폼 가용성을 보장한다.
+    // 1) KDSIS 페이지 로드 — portal warmup → deep link → HTTP status check
+    //    → DOM 준비. networkidle은 쓰지 않는다 (WebSquare가 long-poll / 주기
+    //    XHR을 계속 열고 있어서 idle이 영영 안 오는 경우가 있다).
     console.log("[KDSIS] 페이지 로딩 중...");
-    await page.goto(KDSIS_URL, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
-
-    // WebSquare 폼 준비 대기 — 고정 슬립 대신 필드+버튼 DOM 출현을 실 대기.
-    await waitForKdsisReady(page);
+    await navigateToKdsis(page);
 
     // 2) 검색 필드 입력
     console.log("[KDSIS] 검색 조건 입력:", params);
@@ -837,17 +867,7 @@ async function openRowDetail({ params, rowKey }) {
   });
   try {
     const page = await context.newPage();
-    const response = await page.goto(KDSIS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
-    // Anti-scrape defenses commonly answer with 403 / 429 before any DOM is
-    // parsed. Catch it at the transport layer so we don't burn 20s waiting
-    // for a form that's never coming.
-    if (response && !response.ok() && response.status() !== 304) {
-      recordBlockHit();
-      const err = new Error("KDSIS_BLOCKED");
-      err.diagnostics = { httpStatus: response.status(), url: response.url() };
-      throw err;
-    }
-    await waitForKdsisReady(page);
+    await navigateToKdsis(page);
 
     // KDSIS 차단 페이지 감지 — 본문에 "접근이 거부" / "차단" / 403 표시가 있으면
     // 조기 실패시켜 호출자가 503을 돌려줄 수 있게 한다.
@@ -1378,6 +1398,76 @@ app.post("/api/search/direct", async (req, res) => {
   }
 });
 
+// GET /api/debug/raw — Playwright를 거치지 않고 node https로 KDSIS를 직접 호출.
+// 목적: Render 서버 IP → KDSIS 네트워크 레이어만 격리해서 본다 (IP 차단 판별).
+// 쉘 접근이 없어도 브라우저 주소창에서 바로 결과를 얻을 수 있도록 JSON으로 반환.
+app.get("/api/debug/raw", async (req, res) => {
+  const target = typeof req.query.url === "string" && req.query.url.startsWith("http")
+    ? req.query.url
+    : KDSIS_URL;
+  const ua =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+  const started = Date.now();
+
+  const result = await new Promise((resolve) => {
+    try {
+      const u = new URL(target);
+      const req2 = https.request(
+        {
+          method: "GET",
+          hostname: u.hostname,
+          port: u.port || 443,
+          path: u.pathname + u.search,
+          headers: {
+            "User-Agent": ua,
+            Referer: "https://kdsis.dapa.go.kr/",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+          },
+          timeout: 15000,
+        },
+        (r) => {
+          const chunks = [];
+          let size = 0;
+          r.on("data", (c) => {
+            chunks.push(c);
+            size += c.length;
+            if (size > 200_000) r.destroy(); // bodyPreview로 쓸 선두만 있으면 됨
+          });
+          r.on("end", () => {
+            const body = Buffer.concat(chunks).toString("utf8");
+            resolve({
+              ok: true,
+              httpStatus: r.statusCode,
+              statusMessage: r.statusMessage,
+              headers: r.headers,
+              sizeSampled: size,
+              bodyPreview: body.slice(0, 500),
+              bodyLooksEmpty: body.trim().length < 30,
+              elapsedMs: Date.now() - started,
+            });
+          });
+          r.on("error", (err) =>
+            resolve({ ok: false, stage: "response", error: String(err), elapsedMs: Date.now() - started })
+          );
+        }
+      );
+      req2.on("timeout", () => {
+        req2.destroy();
+        resolve({ ok: false, stage: "timeout", elapsedMs: Date.now() - started });
+      });
+      req2.on("error", (err) =>
+        resolve({ ok: false, stage: "request", error: String(err), elapsedMs: Date.now() - started })
+      );
+      req2.end();
+    } catch (err) {
+      resolve({ ok: false, stage: "setup", error: String(err) });
+    }
+  });
+
+  res.json({ target, userAgent: ua, ...result });
+});
+
 // GET/POST /api/debug — 진단 모드 (내부 상태 전부 덤프)
 //   GET:  기본 테스트 쿼리 (규격상태=활성)로 자동 실행
 //   POST: { params: {...} } 로 커스텀 쿼리 지정 가능
@@ -1820,6 +1910,7 @@ app.listen(PORT, () => {
   ║  POST /api/search/direct — 필드 직접 지정     ║
   ║  GET  /api/health      — 상태 확인             ║
   ║  GET  /api/debug       — 진단 모드 (덤프)     ║
+  ║  GET  /api/debug/raw   — 원시 fetch (IP 확인) ║
   ║  GET  /api/screenshot  — 마지막 검색 캡처     ║
   ╚═══════════════════════════════════════════════╝
   `);
