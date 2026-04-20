@@ -158,6 +158,16 @@ const SEARCH_BUTTON_SELECTORS = [
   'button:has-text("검색")',
 ];
 
+// KDSIS가 결과 그리드 id를 바꾼 전례가 있어 하드코딩하지 않고 후보 리스트에서
+// 런타임에 고른다. 운영 관찰상 실제 검색 결과는 ggr_stndList에 들어가고,
+// ggr_exelSearchList는 "엑셀다운로드" 용 보조 그리드로 보인다. 따라서 실제
+// 데이터가 있는 grid를 우선 고르고, 없으면 tbody가 존재하는 첫 후보로 폴백.
+const GRID_ID_CANDIDATES = ["ggr_stndList", "ggr_exelSearchList"];
+// 후보 중 실제로 행이 있는 grid를 우선 고른다. page.evaluate 안에서
+// `eval(PICK_GRID_ID)(gridIds)` 형태로 쓰도록 문자열 템플릿 대신 해당 함수
+// 로직을 각 evaluate에서 인라인한다 — Playwright가 콜백 본문만 직렬화하므로
+// 외부 참조가 남으면 ReferenceError가 된다.
+
 async function clickSearchButton(page, { timeout = 10000 } = {}) {
   // WebSquare가 버튼을 JS로 나중에 붙이는 경우가 있어, 즉시 $()로 조회하면
   // 초기화가 끝나기 전에 실패한다. 250ms 간격으로 deadline까지 폴링하며
@@ -310,12 +320,32 @@ async function fillSearchForm(page, params) {
     try {
       await page.waitForSelector(sel, { timeout: 5000 });
       if (config.type === "text") {
+        // WebSquare w2input은 자체 이벤트 파이프라인으로 값을 바인딩하는데,
+        // page.fill만으로는 focus → keydown/keyup → change 시퀀스가 부족해
+        // 내부 모델에 값이 반영되지 않는 경우가 관찰됐다(검색 시 필터 없이
+        // 제출되어 0건 또는 전체 결과가 나오는 증상). focus → clear → type →
+        // blur로 실제 사용자 타이핑을 재현하고, 추가로 JS로 value 를 직접
+        // 세팅한 뒤 input/change 이벤트를 dispatch — 어느 한쪽이 막혀도
+        // 다른 쪽이 반영되도록 이중 안전장치.
+        await page.focus(sel);
         await page.fill(sel, "");
-        await page.fill(sel, value);
+        await page.type(sel, String(value), { delay: 20 });
+        await page.evaluate(
+          ({ s, v }) => {
+            const el = document.querySelector(s);
+            if (!el) return;
+            el.value = v;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+          },
+          { s: sel, v: String(value) }
+        );
+        await page.keyboard.press("Tab").catch(() => {});
       } else {
         await page.selectOption(sel, { label: value });
+        await page.dispatchEvent(sel, "change");
       }
-      await page.dispatchEvent(sel, "change");
     } catch (err) {
       console.warn(`[KDSIS] 폼 입력 실패 (${fieldName}):`, err.message);
     }
@@ -326,19 +356,23 @@ async function fillSearchForm(page, params) {
 async function waitForGridResult(page, timeoutMs = 15000) {
   await page.waitForLoadState("networkidle").catch(() => {});
   await page.waitForFunction(
-    () => {
-      const tb = document.querySelector("#ggr_stndList_body_tbody");
-      if (tb) {
-        const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
-        if (rows.length > 0) return true;
+    (gridIds) => {
+      for (const gid of gridIds) {
+        const tb = document.getElementById(`${gid}_body_tbody`);
+        if (tb) {
+          const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+          if (rows.length > 0) return true;
+        }
       }
-      const cnt = document.querySelector("#spn_listCnt");
-      if (cnt) {
-        const txt = (cnt.textContent || "").trim();
+      // zero-row signal: any element whose id ends with "listCnt" reading "0건".
+      const cntEls = document.querySelectorAll('[id$="listCnt"], #spn_listCnt');
+      for (const el of cntEls) {
+        const txt = (el.textContent || "").trim();
         if (/^0건?$/.test(txt) || txt === "0") return true;
       }
       return false;
     },
+    GRID_ID_CANDIDATES,
     { timeout: timeoutMs }
   ).catch(() => {});
 }
@@ -667,20 +701,22 @@ async function _runSearchOnce(params) {
     // 고정 타임아웃 대신 "실제로 행이 나타날 때까지" 명시적으로 기다림
     await page.waitForLoadState("networkidle").catch(() => {});
     await page.waitForFunction(
-      () => {
-        const tb = document.querySelector("#ggr_stndList_body_tbody");
-        if (tb) {
-          const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
-          if (rows.length > 0) return true;
+      (gridIds) => {
+        for (const gid of gridIds) {
+          const tb = document.getElementById(`${gid}_body_tbody`);
+          if (tb) {
+            const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+            if (rows.length > 0) return true;
+          }
         }
-        // 결과가 0건인 경우에도 무한 대기하지 않도록 카운트 요소 확인
-        const cnt = document.querySelector("#spn_listCnt");
-        if (cnt) {
-          const txt = (cnt.textContent || "").trim();
+        const cntEls = document.querySelectorAll('[id$="listCnt"], #spn_listCnt');
+        for (const el of cntEls) {
+          const txt = (el.textContent || "").trim();
           if (/^0건?$/.test(txt) || txt === "0") return true;
         }
         return false;
       },
+      GRID_ID_CANDIDATES,
       { timeout: 15000 }
     ).catch(() => {
       console.warn("[KDSIS] 그리드 렌더링 대기 타임아웃 (15초) — 계속 진행");
@@ -688,19 +724,24 @@ async function _runSearchOnce(params) {
     // 안정화용 추가 대기 — diagnosticSearch가 스크린샷/DOM 스캔으로 우연히 얻던 버퍼와 맞춤
     await page.waitForTimeout(2500);
 
-    // 5) 결과 파싱 — KDSIS WebSquare w2grid (실제 tbody: ggr_stndList)
-    //   칼럼은 하드코딩하지 않고 thead를 읽어서 동적으로 구성
+    // 5) 결과 파싱 — KDSIS WebSquare w2grid (tbody 후보: GRID_ID_CANDIDATES)
+    //   칼럼은 하드코딩하지 않고 thead를 읽어서 동적으로 구성. grid id는 DOM에
+    //   실제로 존재하는 첫 후보를 골라 본 검색과 스크롤 루프에서 공유한다.
     console.log("[KDSIS] 결과 파싱 중...");
-    const GRID_ID = "ggr_stndList";
-    const results = await page.evaluate((gridId) => {
-      const data = { rows: [], columns: [], totalCount: 0 };
+    const parsed = await page.evaluate((gridIds) => {
+      const data = { rows: [], columns: [], totalCount: 0, activeGridId: null };
+
+      // 실제로 DOM에 붙어있는 첫 후보를 고른다.
+      const gridId = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`));
+      data.activeGridId = gridId || null;
+      if (!gridId) return data;
 
       // ── 헤더에서 칼럼명 추출 ──
       // KDSIS w2grid는 "형상관리책임기관" 같은 그룹 헤더에 colspan=3을 붙여
       // 하위 3개 데이터 칼럼을 묶는다. colspan을 펼쳐야 td와 1:1 매칭됨.
       const headOrder = [];
       const thead =
-        document.querySelector(`#${gridId}_header_thead`) ||
+        document.getElementById(`${gridId}_header_thead`) ||
         document.querySelector(`#${gridId} thead`);
       if (thead) {
         thead.querySelectorAll("th[col_id]").forEach((th) => {
@@ -719,7 +760,7 @@ async function _runSearchOnce(params) {
       // thead col_id(column53 등)와 td col_id(stdrdKndNm 등)는 서로 다른
       // 네임스페이스라 속성값으로 매칭하면 안 됨. td 순서 기반으로 짝짓는다.
       // 첫 번째 td는 row number 셀(id=_headerRowNumber_...)이므로 제외.
-      const tbody = document.querySelector(`#${gridId}_body_tbody`);
+      const tbody = document.getElementById(`${gridId}_body_tbody`);
       if (!tbody) return data;
 
       const trs = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
@@ -745,17 +786,21 @@ async function _runSearchOnce(params) {
         if (hasData) data.rows.push(rowData);
       });
 
-      // ── 총 건수 추출 (#spn_listCnt) ──
-      const countEl = document.querySelector("#spn_listCnt");
-      if (countEl) {
-        const m = countEl.textContent.match(/[\d,]+/);
-        if (m) data.totalCount = parseInt(m[0].replace(/,/g, ""));
-      } else {
-        data.totalCount = data.rows.length;
+      // ── 총 건수 추출 — 고정 id가 아니라 id$="listCnt" 패턴을 쓴다 ──
+      const cntEls = document.querySelectorAll('[id$="listCnt"], #spn_listCnt');
+      for (const el of cntEls) {
+        const m = (el.textContent || "").match(/[\d,]+/);
+        if (m) { data.totalCount = parseInt(m[0].replace(/,/g, "")); break; }
       }
+      if (!data.totalCount) data.totalCount = data.rows.length;
 
       return data;
-    }, GRID_ID);
+    }, GRID_ID_CANDIDATES);
+    const GRID_ID = parsed.activeGridId || GRID_ID_CANDIDATES[0];
+    const results = parsed;
+    if (parsed.activeGridId) {
+      console.log(`[KDSIS] 활성 grid id: ${parsed.activeGridId}`);
+    }
 
     // 6) 무한 스크롤 — 추가 데이터 로딩
     //   매 스크롤마다 thead를 다시 읽어서 동적 파싱 — col_id 하드코딩 없음.
@@ -901,8 +946,10 @@ async function openRowDetail({ params, rowKey }) {
 
     // 지정 행(규격번호 일치) 클릭. 새 페이지/팝업이 열릴 수 있어 대기.
     const newPagePromise = context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
-    const clicked = await page.evaluate((key) => {
-      const tbody = document.querySelector("#ggr_stndList_body_tbody");
+    const clicked = await page.evaluate(({ key, gridIds }) => {
+      const gridId = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`));
+      if (!gridId) return false;
+      const tbody = document.getElementById(`${gridId}_body_tbody`);
       if (!tbody) return false;
       const rows = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
       for (const tr of rows) {
@@ -921,7 +968,7 @@ async function openRowDetail({ params, rowKey }) {
         if (link) { link.click(); return "fallback_first"; }
       }
       return false;
-    }, rowKey);
+    }, { key: rowKey, gridIds: GRID_ID_CANDIDATES });
     if (!clicked) throw new Error("ROW_NOT_FOUND");
 
     const newPage = await newPagePromise;
@@ -1188,19 +1235,22 @@ async function diagnosticSearch(params) {
     await page.waitForLoadState("networkidle").catch(() => {});
     // 그리드 행이 실제로 나타날 때까지 대기 (searchKDSIS와 동일 정책)
     await page.waitForFunction(
-      () => {
-        const tb = document.querySelector("#ggr_stndList_body_tbody");
-        if (tb) {
-          const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
-          if (rows.length > 0) return true;
+      (gridIds) => {
+        for (const gid of gridIds) {
+          const tb = document.getElementById(`${gid}_body_tbody`);
+          if (tb) {
+            const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+            if (rows.length > 0) return true;
+          }
         }
-        const cnt = document.querySelector("#spn_listCnt");
-        if (cnt) {
-          const txt = (cnt.textContent || "").trim();
+        const cntEls = document.querySelectorAll('[id$="listCnt"], #spn_listCnt');
+        for (const el of cntEls) {
+          const txt = (el.textContent || "").trim();
           if (/^0건?$/.test(txt) || txt === "0") return true;
         }
         return false;
       },
+      GRID_ID_CANDIDATES,
       { timeout: 15000 }
     ).catch(() => {});
     await page.waitForTimeout(500);
@@ -1272,11 +1322,12 @@ async function diagnosticSearch(params) {
     diag.tbodyCandidates = scan.tbodyCandidates;
 
     // 7) 실제 사용 tbody 상세 + thead 칼럼 구조 확인
-    const tbodyInfo = await page.evaluate(() => {
-      const tb = document.querySelector("#ggr_stndList_body_tbody");
+    const tbodyInfo = await page.evaluate((gridIds) => {
+      const gridId = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`)) || gridIds[0];
+      const tb = document.getElementById(`${gridId}_body_tbody`);
       const thead =
-        document.querySelector("#ggr_stndList_header_thead") ||
-        document.querySelector("#ggr_stndList thead");
+        document.getElementById(`${gridId}_header_thead`) ||
+        document.querySelector(`#${gridId} thead`);
       const columns = [];
       if (thead) {
         thead.querySelectorAll("th[col_id]").forEach((th) => {
@@ -1286,16 +1337,18 @@ async function diagnosticSearch(params) {
           });
         });
       }
-      if (!tb) return { found: false, columns };
+      if (!tb) return { found: false, activeGridId: gridId, columns };
       const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
       return {
         found: true,
+        activeGridId: gridId,
         rowCount: rows.length,
         columns,
         firstRowHtml: rows[0]?.outerHTML.slice(0, 2500) || null,
       };
-    });
+    }, GRID_ID_CANDIDATES);
     diag.gridTbodyFound = tbodyInfo.found;
+    diag.gridActiveId = tbodyInfo.activeGridId || null;
     diag.gridRowCount = tbodyInfo.rowCount || 0;
     diag.gridColumns = tbodyInfo.columns || [];
     diag.gridFirstRowHtml = tbodyInfo.firstRowHtml;
@@ -1656,14 +1709,17 @@ app.post("/api/debug/detail", async (req, res) => {
     }
     await clickSearchButton(page);
     await page.waitForFunction(
-      () => {
-        const tb = document.querySelector("#ggr_stndList_body_tbody");
-        if (tb) {
-          const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
-          if (rows.length > 0) return true;
+      (gridIds) => {
+        for (const gid of gridIds) {
+          const tb = document.getElementById(`${gid}_body_tbody`);
+          if (tb) {
+            const rows = tb.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+            if (rows.length > 0) return true;
+          }
         }
         return false;
       },
+      GRID_ID_CANDIDATES,
       { timeout: 15000 }
     ).catch(() => {});
     await page.waitForTimeout(2000);
@@ -1671,8 +1727,10 @@ app.post("/api/debug/detail", async (req, res) => {
 
     // 첫 행의 규격서명 링크 클릭. 새 페이지가 열릴 수 있으므로 이벤트 대기.
     const newPagePromise = context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
-    const clicked = await page.evaluate(() => {
-      const tbody = document.querySelector("#ggr_stndList_body_tbody");
+    const clicked = await page.evaluate((gridIds) => {
+      const gridId = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`));
+      if (!gridId) return false;
+      const tbody = document.getElementById(`${gridId}_body_tbody`);
       if (!tbody) return false;
       const firstRow = tbody.querySelector("tr.grid_body_row, tr[class*='grid_body']");
       if (!firstRow) return false;
@@ -1683,7 +1741,7 @@ app.post("/api/debug/detail", async (req, res) => {
       const tds = firstRow.querySelectorAll("td");
       if (tds[3]) { tds[3].click(); return true; }
       return false;
-    });
+    }, GRID_ID_CANDIDATES);
     diag.rowClicked = clicked;
 
     await page.waitForTimeout(3000);
