@@ -112,6 +112,14 @@
     .search-status .spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
     .search-params{display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.75rem}
     .param-tag{font-size:.75rem;padding:3px 10px;background:var(--primary-tint);color:var(--primary);border-radius:var(--r-full);font-weight:500}
+    .batch-query-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;padding:.5rem .75rem;background:var(--primary-tint);border-radius:var(--r-md);font-size:.8125rem;font-weight:600;color:var(--primary)}
+    .batch-query-header::before{content:"🔎";font-size:.9rem}
+    .batch-progress{display:flex;align-items:center;gap:.75rem;padding:.625rem .875rem;background:var(--bg-soft,rgba(0,0,0,.03));border:1px solid var(--border,rgba(0,0,0,.08));border-radius:var(--r-md);font-size:.8125rem;margin-bottom:.5rem}
+    .batch-progress-bar{flex:1;height:6px;background:var(--border,rgba(0,0,0,.08));border-radius:999px;overflow:hidden;position:relative}
+    .batch-progress-fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,var(--primary) 0%,var(--primary) 100%);width:0%;transition:width .3s ease}
+    .batch-progress-text{font-variant-numeric:tabular-nums;color:var(--muted,#666)}
+    .batch-progress.done .batch-progress-fill{background:#22aa55}
+    .batch-progress.has-error .batch-progress-fill{background:linear-gradient(90deg,var(--primary) 0%,#e0664a 100%)}
 
     /* Result — card + table hybrid */
     .result-wrap{width:100%;margin:.75rem 0}
@@ -439,7 +447,7 @@
           <button class="send-btn" type="submit" id="sendBtn" disabled aria-label="전송">▲</button>
         </form>
       </div>
-      <p class="hint" id="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+K 새 대화 · ? 단축키 · KDSIS 실시간 조회</p>
+      <p class="hint" id="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · 여러 줄 = 일괄 검색(최대 20개) · Ctrl+K 새 대화 · ?</p>
       <div class="input-counter" id="inputCounter" aria-hidden="true" hidden>0 / 500</div>
     </div>
   </div>
@@ -1085,7 +1093,18 @@ form.addEventListener("submit", (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text || busy) return;
-  sendQuery(text);
+  // 여러 줄 입력 = 일괄(배치) 검색. 공백·빈 줄은 버리고, 1개밖에 안 남으면
+  // 그냥 단일 검색. 20개 상한은 서버와 일치시켜 두자 (KDSIS_BATCH_MAX).
+  const lines = text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  if (lines.length > 20) {
+    toast("한 번에 최대 20개까지 일괄 검색할 수 있습니다.");
+    return;
+  }
+  if (lines.length > 1) {
+    sendBatch(lines);
+  } else {
+    sendQuery(lines[0] || text);
+  }
 });
 
 // ── Direct search (필드 명시 — AI 파싱 우회) ──
@@ -1138,6 +1157,133 @@ async function runDirectSearch(params, displayText) {
   setStatus("● 온라인", false);
   busy = false;
   scrollBottom();
+}
+
+// ── Batch flow (여러 쿼리를 NDJSON 스트리밍으로 동시 실행) ──
+// 결과는 서버에서 완료된 순서대로 들어오며, 각 쿼리마다 독립된 result 카드가
+// 아래로 쌓인다. "어떤 쿼리의 결과인지" 구분하려고 카드 최상단에 쿼리 헤더를
+// 삽입한다(_batchHeader). 진행 상태는 단일 progress 바에 반영.
+async function sendBatch(queries) {
+  busy = true;
+  lastSearch = { kind: "batch", queries };
+  updateShareHash(lastSearch);
+  queries.forEach((q) => rememberRecent(q));
+  hideRecent();
+  welcome.style.display = "none";
+  addMessage(queries.join("\n"), "user");
+  input.value = "";
+  input.style.height = "auto";
+  updateInputCounter();
+  sendBtn.disabled = true;
+  setStatus(`일괄 검색 중 (0/${queries.length})`, true);
+
+  // Progress 버블 — 완료 시 사라지거나 최종 요약으로 남길 수 있지만, 지금은
+  // 남겨두어 사용자가 "총 몇 개 돌았고 몇 개 성공/실패" 히스토리를 볼 수 있게.
+  const progId = "bp" + Date.now();
+  const progHtml =
+    `<div class="batch-progress" id="${progId}">` +
+    `<span class="batch-progress-text" id="${progId}-txt">대기 중 · 0 / ${queries.length}</span>` +
+    `<div class="batch-progress-bar"><div class="batch-progress-fill" id="${progId}-fill"></div></div>` +
+    `</div>`;
+  addBotMessage(progHtml, { skipPersist: true });
+
+  let done = 0;
+  let errors = 0;
+  let empties = 0;
+  const total = queries.length;
+  const updateProgress = (finalizing) => {
+    const txt = document.getElementById(progId + "-txt");
+    const fill = document.getElementById(progId + "-fill");
+    const wrap = document.getElementById(progId);
+    if (fill) fill.style.width = Math.round((done / total) * 100) + "%";
+    if (txt) {
+      const parts = [`완료 ${done}/${total}`];
+      if (empties) parts.push(`0건 ${empties}`);
+      if (errors) parts.push(`에러 ${errors}`);
+      txt.textContent = parts.join(" · ");
+    }
+    if (wrap) {
+      if (finalizing) wrap.classList.add("done");
+      if (errors) wrap.classList.add("has-error");
+    }
+    setStatus(`일괄 검색 중 (${done}/${total})`, done < total);
+  };
+
+  try {
+    const res = await fetch("/api/search/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        queries: queries.map((q, i) => ({ id: i, query: q })),
+      }),
+    });
+    if (!res.ok || !res.body) {
+      throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done: streamDone } = await reader.read();
+      if (streamDone) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        let ev;
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        handleBatchEvent(ev, queries);
+        if (ev.type === "result") {
+          done++;
+          if (!ev.rows || ev.rows.length === 0) empties++;
+          updateProgress(false);
+        } else if (ev.type === "error") {
+          done++;
+          errors++;
+          updateProgress(false);
+        }
+      }
+    }
+  } catch (err) {
+    addBotMessage(
+      errorBlockHTML(`일괄 검색 네트워크 에러: ${err.message}`, err.stack || "")
+    );
+  }
+
+  updateProgress(true);
+  setStatus("● 온라인", false);
+  busy = false;
+  scrollBottom();
+}
+
+// NDJSON 이벤트 → UI. result 는 addResultMessage 를 재사용하되 상단에 쿼리
+// 헤더를 삽입해 카드끼리 구분되도록 한다. empty / error 는 일반 메시지로.
+function handleBatchEvent(ev, queries) {
+  if (ev.type !== "result" && ev.type !== "error") return;
+  const qText =
+    ev.query || (ev.id != null && queries[ev.id]) || "(쿼리 미지정)";
+  const headerHtml = `<div class="batch-query-header">${esc(qText)}</div>`;
+  if (ev.type === "result") {
+    if (ev.rows && ev.rows.length > 0) {
+      addResultMessage({ ...ev, __batchHeader: headerHtml });
+    } else {
+      addBotMessage(headerHtml + emptyStateHTML(qText));
+    }
+  } else {
+    addBotMessage(
+      headerHtml +
+        errorBlockHTML(
+          `검색 실패: ${ev.message || "(사유 없음)"}`,
+          ev.detail || ""
+        )
+    );
+  }
 }
 
 // ── Main flow ──
@@ -1406,6 +1552,9 @@ function addResultMessage(data) {
   resultDataByUid.set(uid, { data, sort: restoredSort, page: restoredPage, pageSize: initialPageSize });
   const terms = deriveHighlightTerms(data);
   let html = "";
+
+  // 배치 검색인 경우: 어떤 쿼리의 결과인지 카드 최상단에 명시
+  if (data.__batchHeader) html += data.__batchHeader;
 
   // 검색 파라미터 태그
   if (data.searchParams && Object.keys(data.searchParams).length > 0) {
