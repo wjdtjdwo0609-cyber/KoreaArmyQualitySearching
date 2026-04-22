@@ -951,6 +951,44 @@ async function openRowDetail({ params, rowKey }) {
     await waitForGridResult(page);
     await page.waitForTimeout(1000);
 
+    // 지정된 규격번호가 첫 배치에 없으면 grid 를 스크롤해 추가 페이지를 로드.
+    // 메인 검색(_runSearchOnce)은 MAX_SCROLLS=10 로 230행 전부 끌어오지만,
+    // openRowDetail 은 스크롤이 없어서 예) 230건 중 STD-0008 이 아래쪽에
+    // 있으면 못 찾고 ROW_NOT_FOUND 를 던지던 버그가 있었다.
+    if (rowKey) {
+      const MAX_SCROLLS = Number(process.env.KDSIS_DETAIL_MAX_SCROLLS || 15);
+      let prevRowCount = -1;
+      for (let i = 0; i < MAX_SCROLLS; i++) {
+        const { found, rowCount } = await page.evaluate(
+          ({ key, gridIds }) => {
+            const gid = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`));
+            if (!gid) return { found: false, rowCount: 0 };
+            const tbody = document.getElementById(`${gid}_body_tbody`);
+            const rows = tbody
+              ? tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']")
+              : [];
+            for (const tr of rows) {
+              if ((tr.textContent || "").includes(key)) {
+                tr.scrollIntoView({ block: "center" });
+                return { found: true, rowCount: rows.length };
+              }
+            }
+            const layer =
+              document.getElementById(`${gid}_dataLayer`) ||
+              document.getElementById(`${gid}_body_scroll`) ||
+              document.getElementById(gid);
+            if (layer) layer.scrollTop = layer.scrollHeight;
+            return { found: false, rowCount: rows.length };
+          },
+          { key: rowKey, gridIds: GRID_ID_CANDIDATES }
+        );
+        if (found) break;
+        if (rowCount === prevRowCount) break; // 새 행 없음 = 끝
+        prevRowCount = rowCount;
+        await page.waitForTimeout(800);
+      }
+    }
+
     // 지정 행(규격번호 일치) 클릭. 새 페이지/팝업이 열릴 수 있어 대기.
     const newPagePromise = context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
     const clicked = await page.evaluate(({ key, gridIds }) => {
@@ -968,11 +1006,15 @@ async function openRowDetail({ params, rowKey }) {
           if (tds[3]) { tds[3].click(); return true; }
         }
       }
-      // 키가 없거나 매칭 실패 — 첫 행을 폴백으로
-      const first = rows[0];
-      if (first) {
-        const link = first.querySelector("td a, span.w2grid_span a");
-        if (link) { link.click(); return "fallback_first"; }
+      // key가 명시됐는데 매칭 행이 없으면 실패시킴 — 첫 행 폴백은 잘못된
+      // 상세 팝업을 열어 사용자를 혼동시킨다(STD-0008 요청했는데 STD-0001
+      // 열림). key 없을 때(디버깅/샘플링 경로)만 첫 행 폴백 유지.
+      if (!key) {
+        const first = rows[0];
+        if (first) {
+          const link = first.querySelector("td a, span.w2grid_span a");
+          if (link) { link.click(); return "fallback_first"; }
+        }
       }
       return false;
     }, { key: rowKey, gridIds: GRID_ID_CANDIDATES });
