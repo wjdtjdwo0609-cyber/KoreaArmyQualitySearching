@@ -24,7 +24,6 @@ const path = require("path");
 const {
   cacheKey,
   createCache,
-  createSerialQueue,
   withTimeout,
   isTransient,
   auditResults,
@@ -88,7 +87,15 @@ async function closeBrowser() {
 // contexts in parallel, but KDSIS' WebSquare grid occasionally races when
 // two searches land in the same tick, and memory blows up fast. Queueing
 // is fine because repeat callers hit the cache anyway.
-const runSerial = createSerialQueue();
+// Default concurrency 1 preserves the old serial behaviour; raise
+// KDSIS_SEARCH_CONCURRENCY (e.g. 2) to let batch searches process in
+// parallel without unleashing unlimited contexts.
+const SEARCH_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.KDSIS_SEARCH_CONCURRENCY || 2)
+);
+const searchQueue = createConcurrentQueue(SEARCH_CONCURRENCY);
+const runSerial = (fn) => searchQueue.run(fn);
 
 // TTL+LRU cache with in-flight dedup. Non-error results (even empty) get
 // cached by canonical params key.
@@ -1465,6 +1472,88 @@ app.post("/api/search/direct", async (req, res) => {
   }
 });
 
+// POST /api/search/batch — 여러 쿼리를 NDJSON 스트리밍으로 동시 실행.
+// 동시성 상한은 KDSIS_SEARCH_CONCURRENCY(기본 1). 각 쿼리는 기존 searchKDSIS
+// 경로(캐시 + in-flight dedup)를 그대로 타서 중복 쿼리는 비용 0. 응답은
+// 한 줄에 하나의 JSON 이벤트:
+//   {type:"queued", id, query?, params?}
+//   {type:"started", id}
+//   {type:"result", id, query, params, ...formatResultsForChat output}
+//   {type:"error",  id, query, message, detail?}
+//   {type:"done"}
+// 클라는 response.body.getReader()로 라인 단위로 읽어 카드 UI에 얹으면 됨.
+app.post("/api/search/batch", async (req, res) => {
+  const { queries } = req.body || {};
+  if (!Array.isArray(queries) || queries.length === 0) {
+    return res.status(400).json({ error: "queries 배열이 필요합니다." });
+  }
+  const MAX_BATCH = Math.max(1, Number(process.env.KDSIS_BATCH_MAX || 20));
+  if (queries.length > MAX_BATCH) {
+    return res
+      .status(400)
+      .json({ error: `쿼리는 한 번에 최대 ${MAX_BATCH}개까지 가능합니다.` });
+  }
+
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Accel-Buffering", "no"); // Cloudflare/Nginx proxy 버퍼 off
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+
+  const write = (obj) => {
+    res.write(JSON.stringify(obj) + "\n");
+  };
+
+  // 순서·중복을 유지하도록 id를 배열 인덱스로 부여. 클라가 q.id 지정하면 우선.
+  const normalized = queries.map((q, i) => {
+    const id = q && q.id != null ? q.id : i;
+    const query = typeof q?.query === "string" ? q.query.trim() : "";
+    const params = q?.params && typeof q.params === "object" ? q.params : null;
+    return { id, query, params };
+  });
+
+  for (const q of normalized) write({ type: "queued", id: q.id, query: q.query, params: q.params });
+
+  const tasks = normalized.map((q) =>
+    (async () => {
+      write({ type: "started", id: q.id });
+      try {
+        let params = q.params;
+        if (!params && q.query) params = await parseQuery(q.query);
+        params = params || {};
+        if (Object.keys(params).length === 0) {
+          write({
+            type: "result",
+            id: q.id,
+            query: q.query,
+            params,
+            type_hint: "empty_params",
+            message: "검색 조건을 파악할 수 없습니다.",
+            rows: [],
+            totalCount: 0,
+          });
+          return;
+        }
+        const results = await searchKDSIS(params);
+        const response = formatResultsForChat(params, results);
+        write({ type: "result", id: q.id, query: q.query, params, ...response });
+      } catch (err) {
+        console.error(`[/api/search/batch] id=${q.id} 실패:`, err.message);
+        write({
+          type: "error",
+          id: q.id,
+          query: q.query,
+          message: err.message || String(err),
+          detail: err.stack || null,
+        });
+      }
+    })()
+  );
+
+  await Promise.allSettled(tasks);
+  write({ type: "done" });
+  res.end();
+});
+
 // GET /api/debug/raw — Playwright를 거치지 않고 node https로 KDSIS를 직접 호출.
 // 목적: Render 서버 IP → KDSIS 네트워크 레이어만 격리해서 본다 (IP 차단 판별).
 // 쉘 접근이 없어도 브라우저 주소창에서 바로 결과를 얻을 수 있도록 JSON으로 반환.
@@ -1871,6 +1960,9 @@ app.get("/api/health", (req, res) => {
     inFlight: _inFlight.size,
     aiProvider: AI_PROVIDER,
     uptimeSec: Math.round(process.uptime()),
+    searchActive: searchQueue.active,
+    searchQueued: searchQueue.queued,
+    searchConcurrency: searchQueue.limit,
     downloadActive: downloadPool.active,
     downloadQueued: downloadPool.queued,
     downloadConcurrency: downloadPool.limit,
