@@ -120,6 +120,8 @@
     .batch-progress-text{font-variant-numeric:tabular-nums;color:var(--muted,#666)}
     .batch-progress.done .batch-progress-fill{background:#22aa55}
     .batch-progress.has-error .batch-progress-fill{background:linear-gradient(90deg,var(--primary) 0%,#e0664a 100%)}
+    .attach-scan-status{font-size:.75rem;color:var(--muted,#666);margin-left:.25rem;font-variant-numeric:tabular-nums}
+    .attach-scan-btn[disabled]{opacity:.55;cursor:not-allowed}
 
     /* Result — card + table hybrid */
     .result-wrap{width:100%;margin:.75rem 0}
@@ -1581,6 +1583,8 @@ function addResultMessage(data) {
   html += `<button class="view-toggle" type="button" data-toggle-view="${uid}" aria-pressed="false">📊 표로 보기</button>`;
   html += `<button class="view-toggle" type="button" data-download-csv="${uid}" title="CSV로 다운로드">⬇ CSV</button>`;
   html += `<button class="view-toggle" type="button" data-download-json="${uid}" title="JSON으로 다운로드">⬇ JSON</button>`;
+  html += `<button class="view-toggle attach-scan-btn" type="button" data-attach-scan="${uid}" title="다음 10개 항목의 첨부 유무를 추가로 스캔">📎 더 스캔 (+10)</button>`;
+  html += `<span class="attach-scan-status" id="${uid}-attach-status" aria-live="polite"></span>`;
   html += "</div>";
 
   // Initial slice for first page
@@ -1603,6 +1607,13 @@ function addResultMessage(data) {
   // Fire cache-only attachment prechecks so already-inspected rows show
   // "첨부 N개" / "첨부 없음" without requiring another click.
   precheckAttachmentsDom(document.getElementById(uid + "-cards"));
+  // 자동 Top-N 프리페치 — 캐시 precheck 직후 백그라운드로 상위 N행의 첨부 유무를
+  // 실제로 스캔. 사용자는 "상세" 버튼 하나하나 누를 필요 없이 배지로 확인 가능.
+  // 복원(__restored) 시에는 스캔 금지: 이미 본 결과를 재로드한 것뿐이라 새 비용
+  // 부과가 부당하고, 캐시 precheck 만으로도 이전 라벨은 다 복원됨.
+  if (!data.__restored) {
+    setTimeout(() => prefetchAttachments(uid, ATTACH_PREFETCH_AUTO_N), 150);
+  }
   // Persist structured payload so we can re-render after reload without re-fetching
   pushEvent({
     type: "result",
@@ -1771,6 +1782,23 @@ async function handleClickDelegated(e) {
     table.classList.toggle("hidden", !showingCards);
     viewBtn.textContent = showingCards ? "🗂️ 카드로 보기" : "📊 표로 보기";
     viewBtn.setAttribute("aria-pressed", String(showingCards));
+    return;
+  }
+  const scanBtn = e.target.closest("[data-attach-scan]");
+  if (scanBtn) {
+    const uid = scanBtn.dataset.attachScan;
+    if (scanBtn.disabled) return;
+    scanBtn.disabled = true;
+    const prevLabel = scanBtn.textContent;
+    scanBtn.textContent = "스캔 중…";
+    prefetchAttachments(uid, ATTACH_PREFETCH_AUTO_N).then(({ done }) => {
+      scanBtn.disabled = false;
+      scanBtn.textContent = prevLabel;
+      if (done === 0) {
+        scanBtn.disabled = true;
+        scanBtn.textContent = "📎 모두 스캔 완료";
+      }
+    });
     return;
   }
   const dlBtn = e.target.closest("[data-download-csv], [data-download-json]");
@@ -1989,6 +2017,104 @@ async function precheckAttachmentsDom(root) {
       } catch { /* silent — precheck is best-effort */ }
     })
   );
+}
+
+// ── Active attachment probe (unlike precheckAttachmentsDom, this actually
+//    hits /api/detail to warm the cache). Top-N are prefetched automatically
+//    right after the result card renders so the user sees "📎 첨부 N개" /
+//    "📎 첨부 없음" badges appearing one by one without clicking each row.
+//    The rest ("더 스캔 (+10)" button) lets the user expand coverage on demand.
+const ATTACH_PREFETCH_AUTO_N = 10;     // 자동 프리페치 배치 크기
+const ATTACH_PREFETCH_CONCURRENCY = 2; // 동시 /api/detail 호출 수 — 서버 다운로드 풀과 맞춤
+const attachPrefetchCursor = new Map(); // uid → 다음에 스캔할 row 인덱스(offset)
+
+// 최소 동시성 N짜리 클라이언트 큐. 각 fn 은 async () => void 이고
+// 완료될 때마다 다음 대기자를 띄운다. done 콜백으로 진행 상황 보고.
+function runWithConcurrency(tasks, concurrency, onEach) {
+  return new Promise((resolve) => {
+    let idx = 0;
+    let active = 0;
+    let completed = 0;
+    const total = tasks.length;
+    if (total === 0) return resolve();
+    const next = () => {
+      while (active < concurrency && idx < total) {
+        const my = idx++;
+        active++;
+        Promise.resolve()
+          .then(tasks[my])
+          .catch(() => {})
+          .then(() => {
+            active--;
+            completed++;
+            if (onEach) onEach(completed, total);
+            if (completed === total) resolve();
+            else next();
+          });
+      }
+    };
+    next();
+  });
+}
+
+// Probe N 개의 .attach-block 을 실제로 /api/detail 로 때려서 캐시를 덥히고
+// 버튼 라벨을 갱신한다. limit: 이 호출에서 처리할 개수 (기본 10). uid: 해당
+// result 카드 id (진행 상태 표시용). 이미 로드/스캔 중인 블록은 건너뛴다.
+async function prefetchAttachments(uid, limit) {
+  const root = document.getElementById(uid + "-cards");
+  if (!root) return { started: 0, done: 0 };
+  const allBlocks = Array.from(root.querySelectorAll(".attach-block"));
+  const cursor = attachPrefetchCursor.get(uid) || 0;
+  const status = document.getElementById(uid + "-attach-status");
+  // 현재 커서 이후로 아직 안 건드린 블록만 선택. 캐시 히트로 이미 loaded 된
+  // 블록은 그대로 둠(skip) — precheckAttachmentsDom 이 먼저 돈 상태.
+  const candidates = [];
+  for (let i = cursor; i < allBlocks.length && candidates.length < limit; i++) {
+    const b = allBlocks[i];
+    if (b.dataset.loaded === "1") continue;
+    if (b.dataset.probing === "1") continue;
+    candidates.push({ block: b, idx: i });
+  }
+  if (candidates.length === 0) {
+    if (status) status.textContent = "모든 항목 스캔 완료";
+    return { started: 0, done: 0 };
+  }
+  // 새 커서: 처리한 마지막 블록 이후로 이동
+  attachPrefetchCursor.set(uid, candidates[candidates.length - 1].idx + 1);
+
+  const total = candidates.length;
+  if (status) status.textContent = `첨부 스캔 중… 0/${total}`;
+
+  const tasks = candidates.map(({ block }) => async () => {
+    block.dataset.probing = "1";
+    const spec = block.dataset.spec;
+    const paramsJson = block.dataset.params;
+    if (!spec || !paramsJson) return;
+    try {
+      const qs = new URLSearchParams({ params: paramsJson, key: spec }).toString();
+      const res = await fetch(`/api/detail?${qs}`);
+      if (!res.ok) return;
+      const body = await res.json();
+      const count = Array.isArray(body?.attachments) ? body.attachments.length : 0;
+      block.dataset.loaded = "1";
+      block.dataset.count = String(count);
+      setAttachBtnLabelFromCount(block, count);
+    } catch { /* silent — 실패해도 수동 클릭 경로는 살아있음 */ }
+    finally {
+      block.dataset.probing = "0";
+    }
+  });
+
+  await runWithConcurrency(tasks, ATTACH_PREFETCH_CONCURRENCY, (done) => {
+    if (status) status.textContent = `첨부 스캔 중… ${done}/${total}`;
+  });
+  if (status) {
+    const remaining = allBlocks.length - attachPrefetchCursor.get(uid);
+    status.textContent = remaining > 0
+      ? `스캔 완료 ${total}개 · 남은 ${remaining}개`
+      : `모든 항목 스캔 완료`;
+  }
+  return { started: total, done: total };
 }
 messages.addEventListener("click", handleClickDelegated);
 
