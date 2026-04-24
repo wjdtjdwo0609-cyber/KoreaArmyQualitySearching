@@ -1092,7 +1092,7 @@ async function openRowDetailWithRetry({ params, rowKey }) {
 // onclick=>/<li data-*> 으로 첨부를 렌더하는 화면에서 전부 0건으로 나오는
 // 이슈가 있었다. 이제는 클릭 가능한 모든 요소 + 파일 확장자가 포함된 요소를
 // 넓게 스캔하고 탐지 근거(matched)를 함께 저장해 디버깅 가능하게 한다.
-async function extractAttachments(page) {
+async function extractAttachments(page, opts = {}) {
   const seen = new Map();
   const out = [];
   const FILE_EXT_RE = /\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|ppt|pptx|zip|txt|xml|jpg|jpeg|png|gif)$/i;
@@ -1214,24 +1214,33 @@ async function extractAttachments(page) {
   }
 
   // 직접 디버깅용으로 상세 페이지 전체 HTML + 스크린샷 저장. 다음 호출에
-  // 덮어쓰기 때문에 가장 최근의 detail 페이지를 언제든 /last-detail.html 로
-  // 브라우저에서 바로 볼 수 있다. extractAttachments가 0건을 반환했을 때
+  // 덮어쓰기 때문에 가장 최근의 detail 페이지를 언제든 /api/debug/last-detail
+  // 로 브라우저에서 바로 볼 수 있다. extractAttachments가 0건을 반환했을 때
   // "진짜로 첨부가 없는지" vs "셀렉터가 놓친 건지" 육안으로 즉시 확인 가능.
+  let savedHtml = null;
   try {
     const html = await page.content();
-    await fs.promises.writeFile(
-      path.join(__dirname, "public", "last-detail.html"),
-      html,
-      "utf8"
-    );
+    savedHtml = html;
+    const htmlPath = path.join(__dirname, "public", "last-detail.html");
+    await fs.promises.writeFile(htmlPath, html, "utf8");
+    console.log(`[detail] HTML 저장: ${htmlPath} (${html.length} bytes)`);
     await page
       .screenshot({
         path: path.join(__dirname, "public", "last-detail.png"),
         fullPage: true,
       })
-      .catch(() => {});
-  } catch (_) { /* best-effort — 저장 실패해도 추출 결과는 돌려준다 */ }
+      .then(() => console.log("[detail] 스크린샷 저장 완료"))
+      .catch((e) => console.warn("[detail] 스크린샷 실패:", e.message));
+  } catch (err) {
+    console.warn("[detail] HTML 저장 실패:", err.message);
+  }
 
+  // opts.includeHtml 가 true 면 추출 결과와 함께 페이지 HTML(앞 60KB) 도 동봉.
+  // 파일시스템 우회용 — 사용자가 응답 JSON 만으로 KDSIS 상세 페이지 실물을
+  // 확인할 수 있다.
+  if (opts.includeHtml && savedHtml) {
+    return { attachments: out, html: savedHtml.slice(0, 60_000) };
+  }
   return out;
 }
 
@@ -1730,6 +1739,27 @@ app.post("/api/search/batch", async (req, res) => {
   await Promise.allSettled(tasks);
   write({ type: "done" });
   res.end();
+});
+
+// GET /api/debug/last-detail — extractAttachments 가 마지막으로 저장한
+// 상세 페이지 HTML 을 직접 서빙. express.static 캐싱/라우팅에 영향받지
+// 않도록 fs 로 읽어 그대로 반환. ?as=png 으로 스크린샷도.
+app.get("/api/debug/last-detail", async (req, res) => {
+  const ext = req.query.as === "png" ? "png" : "html";
+  const file = path.join(__dirname, "public", `last-detail.${ext}`);
+  try {
+    const stat = await fs.promises.stat(file);
+    res.setHeader("Content-Type", ext === "png" ? "image/png" : "text/html; charset=utf-8");
+    res.setHeader("Content-Length", String(stat.size));
+    res.setHeader("X-Last-Detail-Mtime", stat.mtime.toISOString());
+    fs.createReadStream(file).pipe(res);
+  } catch (err) {
+    res.status(404).json({
+      error: `last-detail.${ext} 가 아직 없습니다 (/api/detail 호출 후 생성됨).`,
+      detail: err.message,
+      path: file,
+    });
+  }
 });
 
 // GET /api/debug/raw — Playwright를 거치지 않고 node https로 KDSIS를 직접 호출.
@@ -2273,17 +2303,25 @@ app.get("/api/detail", async (req, res) => {
     if (cached) return res.json({ ...cached, __cached: true });
   }
 
+  // ?html=1 로 호출하면 응답 JSON 에 상세 페이지 HTML(앞 60KB) 이 담긴다.
+  // 파일시스템에 의존하지 않고 디버깅하려는 용도.
+  const includeHtml = req.query.html === "1";
   try {
     const result = await downloadPool.run(async () => {
       const { context, page } = await openRowDetailWithRetry({ params, rowKey });
       try {
-        const attachments = await extractAttachments(page);
-        return { attachments, rowKey };
+        const ext = await extractAttachments(page, { includeHtml });
+        if (includeHtml && ext && Array.isArray(ext.attachments)) {
+          return { attachments: ext.attachments, html: ext.html, rowKey };
+        }
+        return { attachments: ext, rowKey };
       } finally {
         try { await context.close(); } catch {}
       }
     });
-    detailCache.set(cacheK, result);
+    // html 은 캐시에 넣지 않는다(60KB×N → 메모리 폭증). 응답에만 동봉.
+    const cacheable = { attachments: result.attachments, rowKey: result.rowKey };
+    detailCache.set(cacheK, cacheable);
     res.json(result);
   } catch (err) {
     const msg = err.message || String(err);
