@@ -1018,7 +1018,32 @@ async function openRowDetail({ params, rowKey }) {
       }
       return false;
     }, { key: rowKey, gridIds: GRID_ID_CANDIDATES });
-    if (!clicked) throw new Error("ROW_NOT_FOUND");
+    if (!clicked) {
+      // ROW_NOT_FOUND 원인 파악용 진단 스냅샷 — grid가 비어있었는지 / 행은
+      // 있는데 key가 안 맞았는지 구별해야 고칠 수 있다.
+      const snap = await page.evaluate((gridIds) => {
+        const gid = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`));
+        const tbody = gid ? document.getElementById(`${gid}_body_tbody`) : null;
+        const rows = tbody
+          ? tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']")
+          : [];
+        const firstRowTexts = Array.from(rows)
+          .slice(0, 5)
+          .map((tr) => (tr.textContent || "").trim().slice(0, 200));
+        const cntEls = document.querySelectorAll('[id$="listCnt"], #spn_listCnt');
+        const cntTxts = Array.from(cntEls).map((el) => (el.textContent || "").trim()).slice(0, 3);
+        return {
+          activeGridId: gid || null,
+          rowCount: rows.length,
+          firstRowTexts,
+          countElTexts: cntTxts,
+          bodyLen: (document.body?.textContent || "").length,
+        };
+      }, GRID_ID_CANDIDATES).catch(() => null);
+      const err = new Error("ROW_NOT_FOUND");
+      err.diagnostics = snap;
+      throw err;
+    }
 
     const newPage = await newPagePromise;
     const target = newPage || page;
@@ -1825,8 +1850,10 @@ app.all("/api/debug/detail", async (req, res) => {
     });
     const page = await context.newPage();
 
-    await page.goto(KDSIS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForTimeout(2000);
+    // 메인 검색 경로와 동일하게 portal warmup + HTTP status 체크가 포함된
+    // navigateToKdsis 헬퍼를 쓴다. 직접 goto 만 쓰면 KDSIS 가 popup URL 로 바로
+    // 들어오는 요청에 빈 셸을 줘서 page.goto 가 30s 타임아웃을 맞는 경우가 있다.
+    await navigateToKdsis(page);
 
     // 검색 실행
     for (const [fieldName, value] of Object.entries(params)) {
@@ -2151,7 +2178,9 @@ app.get("/api/detail", async (req, res) => {
       return res.status(503).json(body);
     }
     if (msg === "ROW_NOT_FOUND") {
-      return res.status(404).json({ error: `해당 규격(${rowKey})을 결과에서 찾지 못했습니다.` });
+      const body = { error: `해당 규격(${rowKey})을 결과에서 찾지 못했습니다.` };
+      if (err.diagnostics) body.diagnostics = err.diagnostics;
+      return res.status(404).json(body);
     }
     console.error("[/api/detail]", msg);
     const body = { error: msg };
