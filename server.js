@@ -1786,14 +1786,19 @@ app.all("/api/debug", async (req, res) => {
   res.json(diag);
 });
 
-// POST /api/debug/detail — 첫 검색 결과의 상세 팝업 구조 덤프
-//   목적: 첨부파일이 직링크인지 JS 다운로드인지 판정
-//   body: { params: {...} } (없으면 규격상태=활성)
-app.post("/api/debug/detail", async (req, res) => {
-  const params =
-    req.body?.params && typeof req.body.params === "object"
-      ? req.body.params
-      : { 규격상태: "활성" };
+// GET/POST /api/debug/detail — 첫 검색 결과의 상세 팝업 구조 덤프
+//   목적: 첨부파일이 어떤 DOM 요소로 렌더되는지 확인 (직링크/JS/버튼 등)
+//   POST body: { params: {...} } / GET query: ?params=<JSON 문자열>&key=<규격번호>
+app.all("/api/debug/detail", async (req, res) => {
+  // POST body 우선, 없으면 GET query 에서 params 를 JSON 파싱.
+  let params = null;
+  if (req.body?.params && typeof req.body.params === "object") {
+    params = req.body.params;
+  } else if (typeof req.query.params === "string") {
+    try { params = JSON.parse(req.query.params); } catch {}
+  }
+  params = params && typeof params === "object" ? params : { 규격상태: "활성" };
+  const rowKey = typeof req.query.key === "string" ? req.query.key : null;
 
   let context;
   const diag = {
@@ -1856,24 +1861,56 @@ app.post("/api/debug/detail", async (req, res) => {
     await page.waitForTimeout(2000);
     diag.searchOk = true;
 
-    // 첫 행의 규격서명 링크 클릭. 새 페이지가 열릴 수 있으므로 이벤트 대기.
+    // 특정 규격이 요청되면 grid 를 스크롤해가며 해당 행을 찾아 클릭. key 가
+    // 없으면 첫 행 클릭(기존 동작).
+    if (rowKey) {
+      for (let i = 0; i < 15; i++) {
+        const { found } = await page.evaluate(
+          ({ key, gridIds }) => {
+            const gid = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`));
+            if (!gid) return { found: false };
+            const tbody = document.getElementById(`${gid}_body_tbody`);
+            const rows = tbody
+              ? tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']")
+              : [];
+            for (const tr of rows) {
+              if ((tr.textContent || "").includes(key)) {
+                tr.scrollIntoView({ block: "center" });
+                return { found: true };
+              }
+            }
+            const layer =
+              document.getElementById(`${gid}_dataLayer`) ||
+              document.getElementById(`${gid}_body_scroll`) ||
+              document.getElementById(gid);
+            if (layer) layer.scrollTop = layer.scrollHeight;
+            return { found: false };
+          },
+          { key: rowKey, gridIds: GRID_ID_CANDIDATES }
+        );
+        if (found) break;
+        await page.waitForTimeout(600);
+      }
+    }
     const newPagePromise = context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
-    const clicked = await page.evaluate((gridIds) => {
+    const clicked = await page.evaluate(({ key, gridIds }) => {
       const gridId = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`));
       if (!gridId) return false;
       const tbody = document.getElementById(`${gridId}_body_tbody`);
       if (!tbody) return false;
-      const firstRow = tbody.querySelector("tr.grid_body_row, tr[class*='grid_body']");
-      if (!firstRow) return false;
-      // 규격서명 셀(inputtype=link) 안의 a 태그 찾기
-      const link = firstRow.querySelector("td a, span.w2grid_span a");
+      const rows = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+      const target = key
+        ? Array.from(rows).find((tr) => (tr.textContent || "").includes(key))
+        : rows[0];
+      if (!target) return false;
+      const link = target.querySelector("td a, span.w2grid_span a");
       if (link) { link.click(); return true; }
-      // 없으면 3번째 td를 더블클릭 대신 직접 click 이벤트 dispatch
-      const tds = firstRow.querySelectorAll("td");
+      const tds = target.querySelectorAll("td");
       if (tds[3]) { tds[3].click(); return true; }
       return false;
-    }, GRID_ID_CANDIDATES);
+    }, { key: rowKey, gridIds: GRID_ID_CANDIDATES });
     diag.rowClicked = clicked;
+    diag.rowKey = rowKey || null;
 
     await page.waitForTimeout(3000);
     const newPage = await newPagePromise;
