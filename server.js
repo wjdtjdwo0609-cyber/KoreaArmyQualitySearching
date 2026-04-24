@@ -21,6 +21,7 @@ const { chromium } = require("playwright");
 const https = require("https");
 const { URL } = require("url");
 const path = require("path");
+const fs = require("fs");
 const {
   cacheKey,
   createCache,
@@ -1087,48 +1088,150 @@ async function openRowDetailWithRetry({ params, rowKey }) {
 //   { name, kind: "direct"|"js", id, href?, onclick?, frameUrl }
 // 직링크(A/B)와 JS 트리거(C)를 모두 수용. UI는 kind 무관하게 같은 URL을 쓰고,
 // triggerDownload가 kind별로 갈라진다.
+// NOTE: 예전엔 <a> 태그만 스캔했다가 KDSIS 상세 팝업이 <button>/<span
+// onclick=>/<li data-*> 으로 첨부를 렌더하는 화면에서 전부 0건으로 나오는
+// 이슈가 있었다. 이제는 클릭 가능한 모든 요소 + 파일 확장자가 포함된 요소를
+// 넓게 스캔하고 탐지 근거(matched)를 함께 저장해 디버깅 가능하게 한다.
 async function extractAttachments(page) {
   const seen = new Map();
   const out = [];
+  const FILE_EXT_RE = /\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|ppt|pptx|zip|txt|xml|jpg|jpeg|png|gif)$/i;
+  const FILE_EXT_INLINE_RE = /\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|ppt|pptx|zip|txt|xml|jpg|jpeg|png|gif)\b/i;
+  const DOWNLOAD_KW_RE = /download|filedown|fn_download|fndownload|filednwld|openfile|goFile|다운로드|첨부/i;
+  const ATTACH_CONTEXT_RE = /첨부|파일\s*목록|file.*list|attach/i;
+
   for (const frame of page.frames()) {
-    const batch = await frame.evaluate(() => {
-      const kw = /첨부|\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|zip|txt|xml|jpg|png)$/i;
-      const result = [];
-      document.querySelectorAll("a").forEach((a, idx) => {
-        const href = a.getAttribute("href") || "";
-        const onclick = a.getAttribute("onclick") || "";
-        const text = (a.textContent || "").trim();
-        const looksLikeFile =
-          /\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|zip|txt|xml|jpg|png)$/i.test(href) ||
-          /\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|zip|txt|xml|jpg|png)/i.test(text) ||
-          /download|fileDown|fn_download|첨부/i.test(onclick);
-        if (!looksLikeFile && !kw.test(text)) return;
-        if (!text) return;
-        result.push({
-          kind: href && !/^javascript:|^#/.test(href) ? "direct" : "js",
-          name: text.slice(0, 200),
-          href: href.slice(0, 1000),
-          onclick: onclick.slice(0, 500),
-          idx,
-        });
-      });
-      return result;
-    }).catch(() => []);
-    for (const b of batch) {
-      // 이름+href/onclick로 de-dup
-      const id = `${b.kind}|${b.name}|${b.href}|${b.onclick}`;
+    const batch = await frame
+      .evaluate(
+        ({ FILE_EXT_SRC, FILE_EXT_INLINE_SRC, DOWNLOAD_KW_SRC, CTX_SRC }) => {
+          const FILE_EXT = new RegExp(FILE_EXT_SRC, "i");
+          const FILE_EXT_INLINE = new RegExp(FILE_EXT_INLINE_SRC, "i");
+          const DOWNLOAD_KW = new RegExp(DOWNLOAD_KW_SRC, "i");
+          const CTX_RE = new RegExp(CTX_SRC, "i");
+
+          // Step 1 — "첨부파일" 섹션 root 후보를 찾아서 그 scope 안을 우선적으로
+          // 훑는다. root를 못 찾으면 body 전체를 scope로 사용.
+          let scope = null;
+          const allEls = document.querySelectorAll("*");
+          for (const el of allEls) {
+            const direct = Array.from(el.childNodes)
+              .filter((n) => n.nodeType === 3)
+              .map((n) => n.textContent)
+              .join("")
+              .trim();
+            if (direct && CTX_RE.test(direct) && el.children.length < 8) {
+              // 이 요소가 "첨부파일" 라벨이면 그 부모(2~3단 위)를 scope로
+              let s = el.parentElement || el;
+              for (let i = 0; i < 3 && s.parentElement; i++) s = s.parentElement;
+              scope = s;
+              break;
+            }
+          }
+          const root = scope || document;
+
+          const hits = [];
+          const tags = "a, button, span, li, tr, div, input";
+          root.querySelectorAll(tags).forEach((el, idx) => {
+            const tag = el.tagName.toLowerCase();
+            const href = el.getAttribute("href") || "";
+            const onclick = el.getAttribute("onclick") || "";
+            const val = el.getAttribute("value") || "";
+            const text = (el.textContent || "").trim();
+            const dataAttrs = Array.from(el.attributes || [])
+              .filter((a) => a.name.startsWith("data-"))
+              .map((a) => `${a.name}=${a.value}`)
+              .join(" ");
+
+            const reasons = [];
+            if (FILE_EXT.test(href)) reasons.push("href-ext");
+            if (FILE_EXT_INLINE.test(text)) reasons.push("text-ext");
+            if (FILE_EXT_INLINE.test(val)) reasons.push("val-ext");
+            if (FILE_EXT_INLINE.test(dataAttrs)) reasons.push("data-ext");
+            if (onclick && DOWNLOAD_KW.test(onclick)) reasons.push("onclick-dl");
+            if (href && /^javascript:/.test(href) && DOWNLOAD_KW.test(href)) reasons.push("href-js-dl");
+            // scope 안에서 클릭 가능한 버튼/링크는 일단 후보로 (너무 넓으면
+            // dedup/텍스트 체크로 걸러짐)
+            if (
+              scope &&
+              (tag === "a" || tag === "button" || (tag === "input" && /button|submit/i.test(el.type || ""))) &&
+              text.length > 0 &&
+              text.length < 120
+            ) {
+              reasons.push("scope-clickable");
+            }
+            if (reasons.length === 0) return;
+            if (!text && !val && !href) return;
+
+            const name = (text || val || href).slice(0, 200);
+            const isDirectHref = href && !/^javascript:|^#$/.test(href);
+            hits.push({
+              tag,
+              kind: isDirectHref ? "direct" : "js",
+              name,
+              href: href.slice(0, 1000),
+              onclick: onclick.slice(0, 500),
+              val: val.slice(0, 200),
+              matched: reasons,
+              idx,
+            });
+          });
+          return { hits, scopeFound: !!scope };
+        },
+        {
+          FILE_EXT_SRC: FILE_EXT_RE.source,
+          FILE_EXT_INLINE_SRC: FILE_EXT_INLINE_RE.source,
+          DOWNLOAD_KW_SRC: DOWNLOAD_KW_RE.source,
+          CTX_SRC: ATTACH_CONTEXT_RE.source,
+        }
+      )
+      .catch(() => ({ hits: [] }));
+
+    for (const b of batch.hits) {
+      const id = `${b.kind}|${b.name}|${b.href}|${b.onclick}|${b.val}`;
       if (seen.has(id)) continue;
+      // "scope-clickable" 만 걸린 것 중 "닫기", "취소", "검색" 같은 명백한
+      // non-첨부 버튼은 이름으로 배제.
+      if (
+        b.matched.length === 1 &&
+        b.matched[0] === "scope-clickable" &&
+        /^(닫기|확인|취소|검색|목록|뒤로|이전|다음|엑셀다운로드|복사|초기화)$/.test(b.name.trim())
+      ) {
+        continue;
+      }
       seen.set(id, true);
       out.push({
-        id: String(out.length),          // 순번 id — UI/client 사용
+        id: String(out.length),
         name: b.name,
         kind: b.kind,
+        tag: b.tag,
         href: b.href || null,
         onclick: b.onclick || null,
+        val: b.val || null,
+        matched: b.matched,
         frameUrl: frame.url().slice(0, 200),
       });
     }
   }
+
+  // 직접 디버깅용으로 상세 페이지 전체 HTML + 스크린샷 저장. 다음 호출에
+  // 덮어쓰기 때문에 가장 최근의 detail 페이지를 언제든 /last-detail.html 로
+  // 브라우저에서 바로 볼 수 있다. extractAttachments가 0건을 반환했을 때
+  // "진짜로 첨부가 없는지" vs "셀렉터가 놓친 건지" 육안으로 즉시 확인 가능.
+  try {
+    const html = await page.content();
+    await fs.promises.writeFile(
+      path.join(__dirname, "public", "last-detail.html"),
+      html,
+      "utf8"
+    );
+    await page
+      .screenshot({
+        path: path.join(__dirname, "public", "last-detail.png"),
+        fullPage: true,
+      })
+      .catch(() => {});
+  } catch (_) { /* best-effort — 저장 실패해도 추출 결과는 돌려준다 */ }
+
   return out;
 }
 
@@ -1137,16 +1240,20 @@ async function extractAttachments(page) {
 // through the same Playwright download pipeline — no need for a separate
 // fetch() path.
 async function triggerDownload(page, attachment) {
-  // Locate the anchor in any frame. We use href+onclick+text as the fingerprint.
+  // extractAttachments 가 a/button/span/li/input 등 다양한 태그를 반환하므로
+  // 여기서도 같은 태그 집합을 훑으며 이름+href+onclick 지문으로 매칭한다.
+  const TAGS = "a, button, span, li, tr, div, input";
   for (const frame of page.frames()) {
     const ok = await frame.evaluate((meta) => {
-      const anchors = document.querySelectorAll("a");
-      for (const a of anchors) {
-        const href = a.getAttribute("href") || "";
-        const onclick = a.getAttribute("onclick") || "";
-        const text = (a.textContent || "").trim();
-        if (text === meta.name && href === meta.href && onclick === meta.onclick) {
-          a.scrollIntoView({ block: "center" });
+      const els = document.querySelectorAll("a, button, span, li, tr, div, input");
+      for (const el of els) {
+        const href = el.getAttribute("href") || "";
+        const onclick = el.getAttribute("onclick") || "";
+        const val = el.getAttribute("value") || "";
+        const text = (el.textContent || "").trim();
+        const name = (text || val || href).slice(0, 200);
+        if (name === meta.name && href === (meta.href || "") && onclick === (meta.onclick || "")) {
+          el.scrollIntoView({ block: "center" });
           return true;
         }
       }
@@ -1156,8 +1263,12 @@ async function triggerDownload(page, attachment) {
 
     const downloadPromise = page.waitForEvent("download", { timeout: 20000 }).catch(() => null);
     await frame.evaluate((meta) => {
-      for (const a of document.querySelectorAll("a")) {
-        if ((a.textContent || "").trim() === meta.name) { a.click(); return; }
+      const els = document.querySelectorAll("a, button, span, li, tr, div, input");
+      for (const el of els) {
+        const text = (el.textContent || "").trim();
+        const val = el.getAttribute("value") || "";
+        const name = (text || val || el.getAttribute("href") || "").slice(0, 200);
+        if (name === meta.name) { el.click(); return; }
       }
     }, attachment).catch(() => {});
     const dl = await downloadPromise;
@@ -2154,8 +2265,13 @@ app.get("/api/detail", async (req, res) => {
   }
 
   const cacheK = `${cacheKey(params)}|${rowKey}`;
-  const cached = detailCache.get(cacheK);
-  if (cached) return res.json({ ...cached, __cached: true });
+  // ?refresh=1 로 호출하면 캐시 건너뛰고 강제 재추출. extractAttachments 로직을
+  // 바꿨거나 KDSIS 가 첨부를 나중에 올렸을 때 유용.
+  const refresh = req.query.refresh === "1";
+  if (!refresh) {
+    const cached = detailCache.get(cacheK);
+    if (cached) return res.json({ ...cached, __cached: true });
+  }
 
   try {
     const result = await downloadPool.run(async () => {
