@@ -1502,16 +1502,13 @@ function renderCardsHtml(data, rows, terms) {
 
     // KDSIS 첨부 스크래핑 + 다운로드 프록시는 KDSIS 가 화면을 자주 바꿔
     // 매우 불안정했다. 사용자가 결국 원하는 건 "이 규격의 첨부파일을 손에
-    // 넣는 것" 이고, KDSIS 자체 사이트에서 받는 게 가장 확실하다. 그래서
-    // 행마다 "KDSIS 에서 열기" 외부 링크를 제공한다. 새 탭에서 KDSIS 의
-    // 메인 검색 화면을 띄우고 사용자가 우리 카드의 규격번호를 그대로
-    // 붙여 넣어 바로 받게.
+    // 넣는 것" 이고, KDSIS 자체 사이트에서 받는 게 가장 확실하다.
+    // KDSIS 는 WebSquare 기반이라 URL 쿼리 prefill 이 불가능 — 그래서 클릭
+    // 한 번에 (1) 규격번호 클립보드 복사 (2) KDSIS 검색 페이지 새 탭. 사용자는
+    // 새 탭에서 Ctrl+V 한 번만 누르면 된다.
     if (specNo) {
-      const kdsisUrl =
-        "https://kdsis.dapa.go.kr/cs/ctlgSpprtMgt/cagecd9250Mgt/gukminPopup.do?tabIdx=0&popYn=Y";
       html += `<div class="attach-block">`;
-      html += `<a href="${kdsisUrl}" target="_blank" rel="noopener noreferrer" class="attach-ext-link" title="새 탭에서 KDSIS 검색 페이지를 열고 규격번호 ${esc(specNo)} 를 검색하세요">🔗 KDSIS에서 ${esc(specNo)} 열기</a>`;
-      html += `<button type="button" class="copy-spec-btn" data-copy-spec="${esc(specNo)}" title="규격번호 클립보드 복사">📋 복사</button>`;
+      html += `<button type="button" class="attach-ext-link" data-open-kdsis="${esc(specNo)}" title="규격번호를 자동 복사하고 KDSIS 검색 페이지를 새 탭에서 엽니다 — 새 탭에서 Ctrl+V (또는 Cmd+V) 로 붙여넣고 검색하세요">🔗 KDSIS에서 ${esc(specNo)} 열기</button>`;
       html += `</div>`;
     }
 
@@ -1786,22 +1783,28 @@ async function handleClickDelegated(e) {
     viewBtn.setAttribute("aria-pressed", String(showingCards));
     return;
   }
-  const copyBtn = e.target.closest("[data-copy-spec]");
-  if (copyBtn) {
-    const spec = copyBtn.dataset.copySpec;
+  const openKdsisBtn = e.target.closest("[data-open-kdsis]");
+  if (openKdsisBtn) {
+    const spec = openKdsisBtn.dataset.openKdsis;
     if (!spec) return;
+    // 클립보드 먼저 복사(사용자 제스처 안에서 하는 게 가장 안정), 그 다음 새 탭.
+    let copied = false;
     try {
       await navigator.clipboard.writeText(spec);
-      const orig = copyBtn.textContent;
-      copyBtn.textContent = "✓ 복사됨";
-      copyBtn.classList.add("copied");
-      setTimeout(() => {
-        copyBtn.textContent = orig;
-        copyBtn.classList.remove("copied");
-      }, 1500);
-    } catch (err) {
-      toast("복사 실패: " + err.message, "error");
-    }
+      copied = true;
+    } catch (_) { /* 권한 거부 등 — 무시하고 새 탭은 그래도 열어준다 */ }
+    window.open(
+      "https://kdsis.dapa.go.kr/cs/ctlgSpprtMgt/cagecd9250Mgt/gukminPopup.do?tabIdx=0&popYn=Y",
+      "_blank",
+      "noopener,noreferrer"
+    );
+    toast(
+      copied
+        ? `${spec} 복사됨 — 새 탭에서 Ctrl+V 후 검색`
+        : `새 탭 열림 — 규격번호 ${spec} 를 직접 입력하세요`,
+      "info",
+      3000
+    );
     return;
   }
   const scanBtn = e.target.closest("[data-attach-scan]");
