@@ -1762,6 +1762,47 @@ app.get("/api/debug/last-detail", async (req, res) => {
   }
 });
 
+// GET /api/debug/detail-page — KDSIS 상세 페이지 HTML 을 그대로 브라우저에
+// 렌더한다. /api/detail 이 첨부 0건만 돌려줄 때 "진짜 첨부가 없는지" 시각
+// 확인하려고 만든 가장 단순한 출구. 같은 params/key 를 받아 즉석에서 detail
+// 페이지를 열고 page.content() 결과를 text/html 로 응답. 캐시·파일시스템
+// 우회. JSON 파싱 없이 브라우저로 한 번에 확인 가능.
+app.get("/api/debug/detail-page", async (req, res) => {
+  const params = _parseParamsQuery(req.query.params);
+  const rowKey = typeof req.query.key === "string" ? req.query.key : "";
+  if (!params || !rowKey) {
+    return res.status(400).json({ error: "params(JSON)과 key(문자열) 필요" });
+  }
+  let context;
+  try {
+    const result = await downloadPool.run(async () => {
+      const r = await openRowDetailWithRetry({ params, rowKey });
+      context = r.context;
+      const html = await r.page.content();
+      return html;
+    });
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    // KDSIS 도메인 절대경로 자원이 우리 origin 으로 잘못 가지 않도록 base
+    // 를 박는다. <base> 가 없으면 popup 페이지 안의 상대 경로 이미지/JS 가
+    // 브라우저에서 깨져 보일 수 있다.
+    const withBase = result.replace(
+      /<head([^>]*)>/i,
+      `<head$1><base href="https://kdsis.dapa.go.kr/">`
+    );
+    res.send(withBase);
+  } catch (err) {
+    res
+      .status(500)
+      .send(
+        `<pre>detail-page 실패: ${err.message}\n${err.stack || ""}</pre>`
+      );
+  } finally {
+    if (context) {
+      try { await context.close(); } catch {}
+    }
+  }
+});
+
 // GET /api/debug/raw — Playwright를 거치지 않고 node https로 KDSIS를 직접 호출.
 // 목적: Render 서버 IP → KDSIS 네트워크 레이어만 격리해서 본다 (IP 차단 판별).
 // 쉘 접근이 없어도 브라우저 주소창에서 바로 결과를 얻을 수 있도록 JSON으로 반환.
