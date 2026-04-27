@@ -31,6 +31,7 @@ const {
   createRateLimiter,
   createByteBoundedCache,
   createConcurrentQueue,
+  validateSearchBudget,
 } = require("./lib/runtime");
 
 const app = express();
@@ -249,7 +250,7 @@ async function navigateToKdsis(page, { warmup = true } = {}) {
   }
   const response = await page.goto(KDSIS_URL, {
     waitUntil: "domcontentloaded",
-    timeout: 30000,
+    timeout: 20000,
   });
   if (response && !response.ok() && response.status() !== 304) {
     recordBlockHit();
@@ -324,6 +325,10 @@ async function waitForKdsisReady(page, { timeout = 20000 } = {}) {
 // behavior can't drift between endpoints. FIELD_MAP must be initialized
 // before this runs (it's defined below but both functions are hoisted at
 // call time, so ordering is fine).
+// NOTE: 메인 검색 경로(`_runSearchOnce`) 는 이 헬퍼를 호출하지 않고 자체
+// 인라인 로직(아래 약 685-711 라인)을 쓴다. 이 헬퍼는 첨부 재현 흐름
+// (`openRowDetail`) 전용 — Tab/keyup 등 무거운 시퀀스가 메인 검색을
+// 깨뜨리지 않게 분리되어 있다. 둘을 통합하려면 양쪽 모두 회귀 테스트 필요.
 async function fillSearchForm(page, params) {
   for (const [fieldName, value] of Object.entries(params || {})) {
     const config = FIELD_MAP[fieldName];
@@ -599,17 +604,14 @@ async function searchKDSIS(params) {
   return p;
 }
 
-// Wall-clock timeout + single retry on transient errors. Cold starts and
-// the WebSquare grid can flake; one retry hides ~90% of those without
-// doubling worst-case latency for the happy path.
-//
-// Cloudflare 100s 게이트웨이를 절대로 넘으면 안 된다 — 넘으면 서버가
-// 응답을 보낼 때 이미 connection 이 끊겨 있어 사용자는 502 HTML 페이지를
-// 받는다. SEARCH_RETRIES=1 + TIMEOUT 75s 조합은 worst-case 150s 라
-// 그 자체가 502 의 원인. 클라이언트(/api/search 호출부)가 fetchWithRetry
-// 로 5xx 에 대해 한 번 자동 재시도하므로 서버 재시도는 0 으로 두고
-// timeout 도 단일 시도가 90s 안에 끝나도록 40s 로 설정.
-const SEARCH_TIMEOUT_MS = Number(process.env.KDSIS_SEARCH_TIMEOUT_MS || 40_000);
+// Wall-clock timeout for a single search attempt. Cloudflare 100s 게이트웨이가
+// 천장이므로 그 안에 단일 시도가 들어와야 한다. dc2b004 에서 40s 로 줄였더니
+// sub-step 합계(portalWarmup 10s + gotoKdsis 30s + formReady 20s + ... ≈ 100s)
+// 가 넘어 정상 검색이 "[KDSIS] search timeout after 40000ms" 로 컷되는 회귀
+// 발생. Standard 플랜(Always On)에서는 cold-start 비용이 사라졌으므로 85s 로
+// 다시 풀고, sub-step 도 함께 다이어트해서 happy path 가 ~22s 안에 끝나게.
+// SEARCH_RETRIES 는 클라이언트(fetchWithRetry)가 5xx 재시도를 담당하므로 0.
+const SEARCH_TIMEOUT_MS = Number(process.env.KDSIS_SEARCH_TIMEOUT_MS || 85_000);
 const SEARCH_RETRIES = Number(process.env.KDSIS_SEARCH_RETRIES || 0);
 
 async function _runSearch(params) {
@@ -736,12 +738,12 @@ async function _runSearchOnce(params) {
         return false;
       },
       GRID_ID_CANDIDATES,
-      { timeout: 15000 }
+      { timeout: 10000 }
     ).catch(() => {
-      console.warn("[KDSIS] 그리드 렌더링 대기 타임아웃 (15초) — 계속 진행");
+      console.warn("[KDSIS] 그리드 렌더링 대기 타임아웃 (10초) — 계속 진행");
     });
     // 안정화용 추가 대기 — diagnosticSearch가 스크린샷/DOM 스캔으로 우연히 얻던 버퍼와 맞춤
-    await page.waitForTimeout(2500);
+    await page.waitForTimeout(1500);
 
     // 5) 결과 파싱 — KDSIS WebSquare w2grid (tbody 후보: GRID_ID_CANDIDATES)
     //   칼럼은 하드코딩하지 않고 thead를 읽어서 동적으로 구성. grid id는 DOM에
@@ -827,12 +829,11 @@ async function _runSearchOnce(params) {
     //   totalCount 게이트를 두지 않는다 — #spn_listCnt 파싱이 실패해 totalCount가
     //   rows.length로 폴백되면 게이트가 항상 false라 전체 결과가 첫 배치(≈10건)에
     //   갇혔다. 루프 내부의 "새 행 없음" 조기 종료가 진짜 신호.
-    // 한 스크롤당 ~2.5s (page.evaluate + waitForTimeout(2000) + 파싱). 10회면
-    // ~25s, 우리 총 timeout 40s 의 60% 를 스크롤만으로 잡아먹어 navigate +
-    // form fill + click + wait 와 합치면 timeout 초과 → 502 원인. 5 로 낮춰
-    // 첫 ~50건 우선 보여주고, 더 필요한 사용자는 KDSIS 직접 검색 링크로
-    // 보낸다. 환경변수 KDSIS_MAX_SCROLLS 로 운영 중 조절 가능.
-    const MAX_SCROLLS = Number(process.env.KDSIS_MAX_SCROLLS || 5);
+    // 한 스크롤당 ~1.5s (page.evaluate + waitForTimeout(1500) + 파싱). 25회면
+    // ~37s, 총 timeout 85s 의 절반 미만으로 안전. listCnt 로 totalCount 가
+    // 알려진 경우 행이 다 차면 즉시 break 하므로 평균 비용은 훨씬 적다.
+    // dc2b004 의 5는 totalCount=230 결과를 ~50행에서 자르는 회귀를 만들었음.
+    const MAX_SCROLLS = Number(process.env.KDSIS_MAX_SCROLLS || 25);
     if (results.rows.length > 0) {
       console.log(`[KDSIS] 무한 스크롤 시작 (현재 ${results.rows.length}건 / 총 ${results.totalCount}건)`);
 
@@ -846,7 +847,7 @@ async function _runSearchOnce(params) {
           if (dataLayer) dataLayer.scrollTop = dataLayer.scrollHeight;
         }, GRID_ID);
 
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(1500);
 
         // 추가된 행만 파싱 (prevRowCount부터) — td 순서 기반 매칭
         const moreResults = await page.evaluate(
@@ -902,6 +903,12 @@ async function _runSearchOnce(params) {
         }
         results.rows.push(...moreResults);
         console.log(`[KDSIS] 스크롤 ${i + 1}: +${moreResults.length}건 (누적 ${results.rows.length}건)`);
+        // listCnt 가 신뢰가능한 totalCount 를 줬다면 그만큼 차자마자 종료.
+        // (totalCount 가 rows.length 로 폴백된 케이스에서는 자명 거짓이라 안전.)
+        if (results.totalCount > 0 && results.rows.length >= results.totalCount) {
+          console.log(`[KDSIS] 스크롤 종료 (totalCount ${results.totalCount} 충족)`);
+          break;
+        }
       }
     }
 
@@ -2523,4 +2530,32 @@ app.listen(PORT, () => {
   getBrowser()
     .then(() => console.log("[startup] Playwright 브라우저 미리 기동 완료"))
     .catch((err) => console.warn("[startup] 브라우저 사전 기동 실패:", err.message));
+
+  // SEARCH_TIMEOUT_MS 가 step worst-case 합계보다 작으면 정상 검색이 컷된다
+  // (dc2b004 회귀 — "[KDSIS] search timeout after 40000ms"). startup 에서
+  // 명시적으로 경고만 찍어 운영자가 ENV 로 즉시 조정할 수 있게.
+  const budget = validateSearchBudget({
+    subBudgets: {
+      portalWarmup: 10_000,   // server.js navigateToKdsis 의 portal goto
+      gotoKdsis: 20_000,      // server.js navigateToKdsis 의 KDSIS_URL goto
+      formReady: 20_000,      // waitForKdsisReady
+      fieldFill: 5_000,       // 필드 입력 (waitForSelector 등)
+      clickSearch: 10_000,    // clickSearchButton
+      gridWait: 10_000,       // 그리드 렌더 대기
+      stabilize: 1_500,       // 안정화
+      scrollLoop: 1_500 * 5,  // 평균 5회 스크롤로 가정
+    },
+    totalBudget: SEARCH_TIMEOUT_MS,
+  });
+  if (!budget.ok) {
+    console.warn(
+      `[startup] SEARCH_TIMEOUT_MS(${SEARCH_TIMEOUT_MS}ms) 가 sub-step 합계` +
+        `(${budget.sum}ms) 보다 작음 — overflow ${budget.overflow}ms.` +
+        ` ENV KDSIS_SEARCH_TIMEOUT_MS 로 조정 필요.`
+    );
+  } else {
+    console.log(
+      `[startup] search budget OK (sub-sum ${budget.sum}ms / total ${SEARCH_TIMEOUT_MS}ms)`
+    );
+  }
 });
