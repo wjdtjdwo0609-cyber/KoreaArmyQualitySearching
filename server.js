@@ -108,7 +108,11 @@ const _inFlight = new Map();   // key → Promise<results>
 // Separate concurrency pool from the search queue — downloads shouldn't
 // block searches and vice versa. Lazy: attachment metadata + bytes are
 // only fetched when the client explicitly opens a row / clicks a file.
-const DOWNLOAD_CONCURRENCY = Number(process.env.KDSIS_DOWNLOAD_CONCURRENCY || 2);
+// 512MB 메모리 환경에서 검색 컨텍스트(2) + 다운로드 컨텍스트(2) = 동시 4개
+// Playwright 컨텍스트로 OOM 위험. 다운로드는 1로 낮춰 메모리 압박 줄이기.
+// (배치 검색은 여전히 동시성 2 로 활용 가능 — 검색이 다운로드보다 더 자주
+// 발생하는 작업.)
+const DOWNLOAD_CONCURRENCY = Number(process.env.KDSIS_DOWNLOAD_CONCURRENCY || 1);
 const downloadPool = createConcurrentQueue(DOWNLOAD_CONCURRENCY);
 
 // Metadata cache: { attachments: [...] } keyed by params + row-key.
@@ -598,8 +602,15 @@ async function searchKDSIS(params) {
 // Wall-clock timeout + single retry on transient errors. Cold starts and
 // the WebSquare grid can flake; one retry hides ~90% of those without
 // doubling worst-case latency for the happy path.
-const SEARCH_TIMEOUT_MS = Number(process.env.KDSIS_SEARCH_TIMEOUT_MS || 75_000);
-const SEARCH_RETRIES = 1;
+//
+// Cloudflare 100s 게이트웨이를 절대로 넘으면 안 된다 — 넘으면 서버가
+// 응답을 보낼 때 이미 connection 이 끊겨 있어 사용자는 502 HTML 페이지를
+// 받는다. SEARCH_RETRIES=1 + TIMEOUT 75s 조합은 worst-case 150s 라
+// 그 자체가 502 의 원인. 클라이언트(/api/search 호출부)가 fetchWithRetry
+// 로 5xx 에 대해 한 번 자동 재시도하므로 서버 재시도는 0 으로 두고
+// timeout 도 단일 시도가 90s 안에 끝나도록 40s 로 설정.
+const SEARCH_TIMEOUT_MS = Number(process.env.KDSIS_SEARCH_TIMEOUT_MS || 40_000);
+const SEARCH_RETRIES = Number(process.env.KDSIS_SEARCH_RETRIES || 0);
 
 async function _runSearch(params) {
   let lastError = null;
@@ -816,7 +827,12 @@ async function _runSearchOnce(params) {
     //   totalCount 게이트를 두지 않는다 — #spn_listCnt 파싱이 실패해 totalCount가
     //   rows.length로 폴백되면 게이트가 항상 false라 전체 결과가 첫 배치(≈10건)에
     //   갇혔다. 루프 내부의 "새 행 없음" 조기 종료가 진짜 신호.
-    const MAX_SCROLLS = Number(process.env.KDSIS_MAX_SCROLLS || 10);
+    // 한 스크롤당 ~2.5s (page.evaluate + waitForTimeout(2000) + 파싱). 10회면
+    // ~25s, 우리 총 timeout 40s 의 60% 를 스크롤만으로 잡아먹어 navigate +
+    // form fill + click + wait 와 합치면 timeout 초과 → 502 원인. 5 로 낮춰
+    // 첫 ~50건 우선 보여주고, 더 필요한 사용자는 KDSIS 직접 검색 링크로
+    // 보낸다. 환경변수 KDSIS_MAX_SCROLLS 로 운영 중 조절 가능.
+    const MAX_SCROLLS = Number(process.env.KDSIS_MAX_SCROLLS || 5);
     if (results.rows.length > 0) {
       console.log(`[KDSIS] 무한 스크롤 시작 (현재 ${results.rows.length}건 / 총 ${results.totalCount}건)`);
 
@@ -2463,6 +2479,18 @@ async function shutdown(signal) {
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+// Render Logs 에 명시적으로 찍히도록 — 침묵 502 의 근원이 unhandled rejection
+// 이거나 uncaught exception 인지 식별하기 위함. 프로세스를 죽이지는 않는다.
+process.on("unhandledRejection", (reason) => {
+  console.error(
+    "[unhandledRejection]",
+    reason && reason.stack ? reason.stack : reason
+  );
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err && err.stack ? err.stack : err);
+});
 
 // ── 서버 시작 ────────────────────────────────────────────
 app.listen(PORT, () => {
