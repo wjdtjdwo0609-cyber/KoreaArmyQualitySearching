@@ -16,6 +16,8 @@ const {
   createRateLimiter,
   createByteBoundedCache,
   createConcurrentQueue,
+  validateSearchBudget,
+  projectScrollCoverage,
 } = require("../lib/runtime");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -423,4 +425,70 @@ test("concurrentQueue: active/queued counters track state", async () => {
 test("concurrentQueue: n<1 normalizes to 1", async () => {
   const q = createConcurrentQueue(0);
   assert.equal(q.limit, 1);
+});
+
+// ── validateSearchBudget ────────────────────────────────────
+// dc2b004 회귀 시나리오 — 사용자가 본 "[KDSIS] search timeout after 40000ms"
+// 의 직접 원인. sub-step worst-case 합계가 SEARCH_TIMEOUT_MS 를 넘으면 무조건
+// 정상 검색이 컷된다. 이 테스트는 그 회귀를 빌드 타임에 잡는다.
+test("validateSearchBudget: dc2b004 (40s budget) overflows", () => {
+  const r = validateSearchBudget({
+    subBudgets: {
+      portalWarmup: 10_000,
+      gotoKdsis: 30_000,
+      formReady: 20_000,
+      fieldSelectors: 5_000,
+      clickSearch: 10_000,
+      gridWait: 15_000,
+      stabilize: 2_500,
+      scrollLoop: 2_500 * 5,
+    },
+    totalBudget: 40_000,
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.overflow > 0, "overflow > 0 expected");
+  assert.equal(r.totalBudget, 40_000);
+});
+
+test("validateSearchBudget: 85s budget with diet sub-budgets passes", () => {
+  const r = validateSearchBudget({
+    subBudgets: {
+      portalWarmup: 10_000,
+      gotoKdsis: 20_000,
+      formReady: 20_000,
+      fieldSelectors: 5_000,
+      clickSearch: 10_000,
+      gridWait: 10_000,
+      stabilize: 1_500,
+      scrollLoop: 1_500 * 5,
+    },
+    totalBudget: 85_000,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.overflow, 0);
+});
+
+test("validateSearchBudget: empty input is trivially ok", () => {
+  const r = validateSearchBudget({ subBudgets: {}, totalBudget: 1000 });
+  assert.equal(r.ok, true);
+  assert.equal(r.sum, 0);
+});
+
+// ── projectScrollCoverage ──────────────────────────────────
+test("projectScrollCoverage: MAX_SCROLLS=5 cannot cover 230 rows", () => {
+  const r = projectScrollCoverage({ totalCount: 230, maxScrolls: 5 });
+  assert.equal(r.sufficient, false);
+  assert.ok(r.projected < 230);
+  assert.ok(r.coverage < 1);
+});
+
+test("projectScrollCoverage: MAX_SCROLLS=25 covers 230 rows", () => {
+  const r = projectScrollCoverage({ totalCount: 230, maxScrolls: 25 });
+  assert.equal(r.sufficient, true);
+  assert.equal(r.coverage, 1);
+});
+
+test("projectScrollCoverage: unknown totalCount returns sufficient=true", () => {
+  const r = projectScrollCoverage({ totalCount: 0, maxScrolls: 5 });
+  assert.equal(r.sufficient, true);
 });
