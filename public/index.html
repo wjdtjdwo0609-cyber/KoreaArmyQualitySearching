@@ -1134,11 +1134,15 @@ async function runDirectSearch(params, displayText) {
   scrollBottom();
 
   try {
-    const res = await fetch("/api/search/direct", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ params }),
-    });
+    const res = await fetchWithRetry(
+      "/api/search/direct",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ params }),
+      },
+      { onRetry: () => setStatus("서버 깨우는 중…", true) }
+    );
     const rawText = await res.text();
     let data;
     try { data = JSON.parse(rawText); }
@@ -1218,13 +1222,17 @@ async function sendBatch(queries) {
   };
 
   try {
-    const res = await fetch("/api/search/batch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        queries: queries.map((q, i) => ({ id: i, query: q })),
-      }),
-    });
+    const res = await fetchWithRetry(
+      "/api/search/batch",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          queries: queries.map((q, i) => ({ id: i, query: q })),
+        }),
+      },
+      { onRetry: () => setStatus("서버 깨우는 중…", true) }
+    );
     if (!res.ok || !res.body) {
       throw new Error(`HTTP ${res.status} ${res.statusText}`);
     }
@@ -1314,11 +1322,15 @@ async function sendQuery(text) {
   scrollBottom();
 
   try {
-    const res = await fetch("/api/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: text }),
-    });
+    const res = await fetchWithRetry(
+      "/api/search",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: text }),
+      },
+      { onRetry: () => setStatus("서버 깨우는 중…", true) }
+    );
 
     // 응답이 JSON이 아닐 수 있으므로 먼저 텍스트로 받고 수동 파싱
     // (Render 타임아웃/에러 시 HTML 에러 페이지가 올 수 있음)
@@ -2222,6 +2234,28 @@ function esc(str) {
   const d = document.createElement("div");
   d.appendChild(document.createTextNode(String(str)));
   return d.innerHTML;
+}
+
+// Render 무료 티어가 15분 idle 후 잠들 때 첫 요청이 콜드 스타트(브라우저
+// 재기동 30~60s) 비용을 떠안고 Cloudflare 100s 게이트웨이를 맞아 502 를
+// 받는다. 두 번째 시도는 거의 즉시 정상 응답이 오므로 자동 재시도.
+// 5xx 와 네트워크 에러만 재시도 — 4xx 는 즉시 실패.
+async function fetchWithRetry(url, init, opts = {}) {
+  const max = opts.maxRetries ?? 1;
+  const retryStatuses = new Set([502, 503, 504]);
+  const onRetry = opts.onRetry; // (attempt) => void
+  for (let attempt = 0; attempt <= max; attempt++) {
+    try {
+      const r = await fetch(url, init);
+      if (!retryStatuses.has(r.status)) return r;
+      if (attempt >= max) return r;
+    } catch (err) {
+      if (attempt >= max) throw err;
+    }
+    if (onRetry) onRetry(attempt + 1);
+    await new Promise((res) => setTimeout(res, 2500));
+  }
+  return await fetch(url, init); // unreachable
 }
 
 // Regex-escape for turning user strings into safe patterns
