@@ -2487,4 +2487,12 @@ app.listen(PORT, () => {
   ║  GET  /api/screenshot  — 마지막 검색 캡처     ║
   ╚═══════════════════════════════════════════════╝
   `);
+
+  // Render 무료 티어가 콜드 스타트로 깰 때 Playwright 첫 실행이 30~60초
+  // 걸려서 사용자의 첫 검색이 Cloudflare 100초 게이트웨이를 맞고 502 가
+  // 떨어진다. 서버 시작 직후 백그라운드로 브라우저를 미리 띄워서 첫 검색이
+  // 콜드 스타트 비용을 안 떠안게.
+  getBrowser()
+    .then(() => console.log("[startup] Playwright 브라우저 미리 기동 완료"))
+    .catch((err) => console.warn("[startup] 브라우저 사전 기동 실패:", err.message));
 });
