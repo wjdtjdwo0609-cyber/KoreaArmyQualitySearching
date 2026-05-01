@@ -1015,59 +1015,75 @@ async function openRowDetail({ params, rowKey }) {
 
     // 지정 행(규격번호 일치) 클릭. 새 페이지/팝업이 열릴 수 있어 대기.
     const newPagePromise = context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
-    const clicked = await page.evaluate(({ key, gridIds }) => {
+    // evaluate 안에서 .click() 을 직접 호출하면 user gesture 가 없어 KDSIS 가
+    // window.open() 을 차단할 수 있다. 여기서는 매칭된 anchor 에 임시 마커만
+    // 부여하고 실제 클릭은 page.click() 으로 위임 — Playwright 가 진짜 마우스
+    // mousedown/mouseup 을 dispatch 하므로 popup blocker 와 WebSquare 위임
+    // 핸들러가 모두 정상 동작한다.
+    const matched = await page.evaluate(({ key, gridIds }) => {
       const gridId = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`));
-      if (!gridId) return false;
+      if (!gridId) return { ok: false, reason: "no-grid" };
       const tbody = document.getElementById(`${gridId}_body_tbody`);
-      if (!tbody) return false;
+      if (!tbody) return { ok: false, reason: "no-tbody" };
       const rows = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
 
-      // KDSIS 상세 popup(viewTchdataOpenP.xml)은 "규격서명" 컬럼의 anchor 만이
-      // 트리거한다. 규격번호 컬럼에도 anchor 가 있어서 단순히 첫 <a> 를 누르면
-      // 메인 페이지에 머물고 newPageOpened=false 로 끝난다.
       const thead =
         document.getElementById(`${gridId}_header_thead`) ||
         document.querySelector(`#${gridId} thead`);
-      let specIdx = -1;
-      if (thead) {
-        const headers = Array.from(thead.querySelectorAll("th[col_id]"));
-        specIdx = headers.findIndex((th) =>
-          /규격\s*서명|규격명/.test((th.textContent || "").trim())
-        );
-      }
-      const pickLink = (rowEl) => {
+      const headers = thead ? Array.from(thead.querySelectorAll("th[col_id]")) : [];
+      const headerTexts = headers.map((h) => (h.textContent || "").trim());
+      const specIdx = headers.findIndex((th) =>
+        /규격\s*서명|규격명/.test((th.textContent || "").trim())
+      );
+
+      const findAnchor = (rowEl) => {
         const tds = Array.from(rowEl.querySelectorAll("td")).filter(
           (td) => !(td.id || "").startsWith("_headerRowNumber_")
         );
         const targetCell = specIdx >= 0 ? tds[specIdx] : null;
-        return (
-          (targetCell && targetCell.querySelector("a")) ||
-          rowEl.querySelector("td a, span.w2grid_span a") ||
-          null
-        );
+        const fromSpec = targetCell && targetCell.querySelector("a");
+        if (fromSpec) return { link: fromSpec, fallback: false };
+        const fb = rowEl.querySelector("td a, span.w2grid_span a");
+        return fb ? { link: fb, fallback: true } : null;
       };
 
-      for (const tr of rows) {
-        const text = tr.textContent || "";
-        if (key && text.includes(key)) {
-          const link = pickLink(tr);
-          if (link) { link.click(); return true; }
-          const tds = tr.querySelectorAll("td");
-          if (tds[3]) { tds[3].click(); return true; }
+      let target = null;
+      let fallbackFirst = false;
+      if (key) {
+        for (const tr of rows) {
+          if ((tr.textContent || "").includes(key)) { target = tr; break; }
         }
+      } else if (rows[0]) {
+        target = rows[0];
+        fallbackFirst = true;
       }
-      // key가 명시됐는데 매칭 행이 없으면 실패시킴 — 첫 행 폴백은 잘못된
-      // 상세 팝업을 열어 사용자를 혼동시킨다(STD-0008 요청했는데 STD-0001
-      // 열림). key 없을 때(디버깅/샘플링 경로)만 첫 행 폴백 유지.
-      if (!key) {
-        const first = rows[0];
-        if (first) {
-          const link = pickLink(first);
-          if (link) { link.click(); return "fallback_first"; }
-        }
+      if (!target) return { ok: false, reason: "row-not-found", headerTexts, specIdx };
+
+      const found = findAnchor(target);
+      if (!found || !found.link) {
+        return { ok: false, reason: "no-anchor", headerTexts, specIdx };
       }
-      return false;
+      found.link.setAttribute("data-kdsis-detail-trigger", "1");
+      return {
+        ok: true,
+        headerTexts,
+        specIdx,
+        anchorText: (found.link.textContent || "").trim().slice(0, 80),
+        anchorHref: (found.link.getAttribute("href") || "").slice(0, 120),
+        anchorOnclick: (found.link.getAttribute("onclick") || "").slice(0, 120),
+        usedFallback: !!found.fallback,
+        fallbackFirstRow: fallbackFirst,
+      };
     }, { key: rowKey, gridIds: GRID_ID_CANDIDATES });
+    let clicked = false;
+    if (matched && matched.ok) {
+      try {
+        await page.click('[data-kdsis-detail-trigger="1"]', { timeout: 5000 });
+        clicked = matched.fallbackFirstRow ? "fallback_first" : true;
+      } catch (e) {
+        matched.clickError = e.message ? e.message.slice(0, 200) : String(e);
+      }
+    }
     if (!clicked) {
       // ROW_NOT_FOUND 원인 파악용 진단 스냅샷 — grid가 비어있었는지 / 행은
       // 있는데 key가 안 맞았는지 구별해야 고칠 수 있다.
@@ -1091,7 +1107,7 @@ async function openRowDetail({ params, rowKey }) {
         };
       }, GRID_ID_CANDIDATES).catch(() => null);
       const err = new Error("ROW_NOT_FOUND");
-      err.diagnostics = snap;
+      err.diagnostics = { ...(snap || {}), matched };
       throw err;
     }
 
@@ -2151,22 +2167,63 @@ app.all("/api/debug/detail", async (req, res) => {
       }
     }
     const newPagePromise = context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
-    const clicked = await page.evaluate(({ key, gridIds }) => {
+    // openRowDetail 과 동일한 marker 패턴: anchor 에 임시 마커만 부여하고
+    // 실제 클릭은 page.click() — Playwright 진짜 마우스 시뮬레이션이라
+    // popup blocker / WebSquare 위임 핸들러 모두 정상 동작.
+    const matched = await page.evaluate(({ key, gridIds }) => {
       const gridId = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`));
-      if (!gridId) return false;
+      if (!gridId) return { ok: false, reason: "no-grid" };
       const tbody = document.getElementById(`${gridId}_body_tbody`);
-      if (!tbody) return false;
+      if (!tbody) return { ok: false, reason: "no-tbody" };
       const rows = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
       const target = key
         ? Array.from(rows).find((tr) => (tr.textContent || "").includes(key))
         : rows[0];
-      if (!target) return false;
-      const link = target.querySelector("td a, span.w2grid_span a");
-      if (link) { link.click(); return true; }
-      const tds = target.querySelectorAll("td");
-      if (tds[3]) { tds[3].click(); return true; }
-      return false;
+      if (!target) return { ok: false, reason: "row-not-found" };
+
+      const thead =
+        document.getElementById(`${gridId}_header_thead`) ||
+        document.querySelector(`#${gridId} thead`);
+      const headers = thead ? Array.from(thead.querySelectorAll("th[col_id]")) : [];
+      const headerTexts = headers.map((h) => (h.textContent || "").trim());
+      const specIdx = headers.findIndex((th) =>
+        /규격\s*서명|규격명/.test((th.textContent || "").trim())
+      );
+      const tds = Array.from(target.querySelectorAll("td")).filter(
+        (td) => !(td.id || "").startsWith("_headerRowNumber_")
+      );
+      const targetCell = specIdx >= 0 ? tds[specIdx] : null;
+      const fromSpec = targetCell && targetCell.querySelector("a");
+      const link = fromSpec || target.querySelector("td a, span.w2grid_span a");
+      if (!link) return { ok: false, reason: "no-anchor", headerTexts, specIdx };
+      link.setAttribute("data-kdsis-detail-trigger", "1");
+      // row 내 모든 anchor 의 컬럼별 분포 — debug 응답에 노출하면 어떤 컬럼이
+      // 진짜 트리거인지 한 번에 식별 가능.
+      const rowAnchors = tds.map((td, i) => {
+        const a = td.querySelector("a");
+        return a ? { col: headerTexts[i] || `col_${i}`, text: (a.textContent || "").trim().slice(0, 40), href: (a.getAttribute("href") || "").slice(0, 80) } : null;
+      }).filter(Boolean);
+      return {
+        ok: true,
+        headerTexts,
+        specIdx,
+        anchorText: (link.textContent || "").trim().slice(0, 80),
+        anchorHref: (link.getAttribute("href") || "").slice(0, 120),
+        anchorOnclick: (link.getAttribute("onclick") || "").slice(0, 120),
+        usedFallback: !fromSpec,
+        rowAnchors,
+      };
     }, { key: rowKey, gridIds: GRID_ID_CANDIDATES });
+    diag.matched = matched;
+    let clicked = false;
+    if (matched && matched.ok) {
+      try {
+        await page.click('[data-kdsis-detail-trigger="1"]', { timeout: 5000 });
+        clicked = true;
+      } catch (e) {
+        diag.matched.clickError = e && e.message ? e.message.slice(0, 200) : String(e);
+      }
+    }
     diag.rowClicked = clicked;
     diag.rowKey = rowKey || null;
 
