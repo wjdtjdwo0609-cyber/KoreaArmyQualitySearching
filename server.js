@@ -1021,10 +1021,36 @@ async function openRowDetail({ params, rowKey }) {
       const tbody = document.getElementById(`${gridId}_body_tbody`);
       if (!tbody) return false;
       const rows = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+
+      // KDSIS 상세 popup(viewTchdataOpenP.xml)은 "규격서명" 컬럼의 anchor 만이
+      // 트리거한다. 규격번호 컬럼에도 anchor 가 있어서 단순히 첫 <a> 를 누르면
+      // 메인 페이지에 머물고 newPageOpened=false 로 끝난다.
+      const thead =
+        document.getElementById(`${gridId}_header_thead`) ||
+        document.querySelector(`#${gridId} thead`);
+      let specIdx = -1;
+      if (thead) {
+        const headers = Array.from(thead.querySelectorAll("th[col_id]"));
+        specIdx = headers.findIndex((th) =>
+          /규격\s*서명|규격명/.test((th.textContent || "").trim())
+        );
+      }
+      const pickLink = (rowEl) => {
+        const tds = Array.from(rowEl.querySelectorAll("td")).filter(
+          (td) => !(td.id || "").startsWith("_headerRowNumber_")
+        );
+        const targetCell = specIdx >= 0 ? tds[specIdx] : null;
+        return (
+          (targetCell && targetCell.querySelector("a")) ||
+          rowEl.querySelector("td a, span.w2grid_span a") ||
+          null
+        );
+      };
+
       for (const tr of rows) {
         const text = tr.textContent || "";
         if (key && text.includes(key)) {
-          const link = tr.querySelector("td a, span.w2grid_span a");
+          const link = pickLink(tr);
           if (link) { link.click(); return true; }
           const tds = tr.querySelectorAll("td");
           if (tds[3]) { tds[3].click(); return true; }
@@ -1036,7 +1062,7 @@ async function openRowDetail({ params, rowKey }) {
       if (!key) {
         const first = rows[0];
         if (first) {
-          const link = first.querySelector("td a, span.w2grid_span a");
+          const link = pickLink(first);
           if (link) { link.click(); return "fallback_first"; }
         }
       }
