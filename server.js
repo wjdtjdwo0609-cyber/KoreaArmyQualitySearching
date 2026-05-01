@@ -2161,10 +2161,29 @@ app.all("/api/debug/detail", async (req, res) => {
         ? Array.from(rows).find((tr) => (tr.textContent || "").includes(key))
         : rows[0];
       if (!target) return false;
-      const link = target.querySelector("td a, span.w2grid_span a");
+
+      // KDSIS 상세 popup(viewTchdataOpenP.xml)은 "규격서명" 컬럼의 anchor 만이
+      // 트리거한다. openRowDetail 과 같은 매핑 로직을 여기도 적용.
+      const thead =
+        document.getElementById(`${gridId}_header_thead`) ||
+        document.querySelector(`#${gridId} thead`);
+      let specIdx = -1;
+      if (thead) {
+        const headers = Array.from(thead.querySelectorAll("th[col_id]"));
+        specIdx = headers.findIndex((th) =>
+          /규격\s*서명|규격명/.test((th.textContent || "").trim())
+        );
+      }
+      const tds = Array.from(target.querySelectorAll("td")).filter(
+        (td) => !(td.id || "").startsWith("_headerRowNumber_")
+      );
+      const targetCell = specIdx >= 0 ? tds[specIdx] : null;
+      const link =
+        (targetCell && targetCell.querySelector("a")) ||
+        target.querySelector("td a, span.w2grid_span a");
       if (link) { link.click(); return true; }
-      const tds = target.querySelectorAll("td");
-      if (tds[3]) { tds[3].click(); return true; }
+      const allTds = target.querySelectorAll("td");
+      if (allTds[3]) { allTds[3].click(); return true; }
       return false;
     }, { key: rowKey, gridIds: GRID_ID_CANDIDATES });
     diag.rowClicked = clicked;
