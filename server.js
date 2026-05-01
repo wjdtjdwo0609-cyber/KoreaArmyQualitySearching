@@ -2197,6 +2197,21 @@ app.all("/api/debug/detail", async (req, res) => {
       const link = fromSpec || target.querySelector("td a, span.w2grid_span a");
       if (!link) return { ok: false, reason: "no-anchor", headerTexts, specIdx };
       link.setAttribute("data-kdsis-detail-trigger", "1");
+      const parentTd = link.closest("td");
+      if (parentTd) parentTd.setAttribute("data-kdsis-detail-trigger-td", "1");
+      // anchor 부모 chain (3단계) — popup 핸들러가 실제 어디 등록됐는지 추적
+      const parentChain = [];
+      let p = link.parentElement;
+      while (p && parentChain.length < 4) {
+        parentChain.push({
+          tag: p.tagName.toLowerCase(),
+          id: p.id || null,
+          class: (p.className || "").toString().slice(0, 80),
+          onclick: (p.getAttribute("onclick") || "").slice(0, 120),
+          ondblclick: (p.getAttribute("ondblclick") || "").slice(0, 120),
+        });
+        p = p.parentElement;
+      }
       // row 내 모든 anchor 의 컬럼별 분포 — debug 응답에 노출하면 어떤 컬럼이
       // 진짜 트리거인지 한 번에 식별 가능.
       const rowAnchors = tds.map((td, i) => {
@@ -2212,23 +2227,49 @@ app.all("/api/debug/detail", async (req, res) => {
         anchorOnclick: (link.getAttribute("onclick") || "").slice(0, 120),
         usedFallback: !fromSpec,
         rowAnchors,
+        parentChain,
       };
     }, { key: rowKey, gridIds: GRID_ID_CANDIDATES });
     diag.matched = matched;
     let clicked = false;
     if (matched && matched.ok) {
-      try {
-        await page.click('[data-kdsis-detail-trigger="1"]', { timeout: 5000 });
-        clicked = true;
-      } catch (e) {
-        diag.matched.clickError = e && e.message ? e.message.slice(0, 200) : String(e);
-      }
+      // 다중 시도: single click → dblclick → parent td click. 첫 popup 발생
+      // 시도에서 멈추고 그 페이지를 사용. 모든 시도 결과는 attempts 에 기록.
+      const attempts = [];
+      const tryClick = async (label, fn) => {
+        const promise = context.waitForEvent("page", { timeout: 4000 }).catch(() => null);
+        let err = null;
+        try { await fn(); } catch (e) { err = e && e.message ? e.message.slice(0, 200) : String(e); }
+        const np = await promise;
+        attempts.push({ label, popup: !!np, error: err });
+        return np;
+      };
+      let newPage = null;
+      newPage = await tryClick("anchor-click", () =>
+        page.click('[data-kdsis-detail-trigger="1"]', { timeout: 4000 })
+      );
+      if (!newPage) newPage = await tryClick("anchor-dblclick", () =>
+        page.dblclick('[data-kdsis-detail-trigger="1"]', { timeout: 4000 })
+      );
+      if (!newPage) newPage = await tryClick("td-click", () =>
+        page.click('[data-kdsis-detail-trigger-td="1"]', { timeout: 4000 })
+      );
+      if (!newPage) newPage = await tryClick("td-dblclick", () =>
+        page.dblclick('[data-kdsis-detail-trigger-td="1"]', { timeout: 4000 })
+      );
+      diag.matched.attempts = attempts;
+      clicked = attempts.some((a) => !a.error);
+      // 첫 시도들 중 popup 뜬 시도가 있으면 newPage 사용. 없으면 main page.
+      diag.matched.successfulAttempt = attempts.find((a) => a.popup)?.label || null;
+      // newPagePromise 는 별도로 위에서 설정됐던 것이라 재사용 안 함
+      diag._earlyNewPage = newPage;
     }
     diag.rowClicked = clicked;
     diag.rowKey = rowKey || null;
 
-    await page.waitForTimeout(3000);
-    const newPage = await newPagePromise;
+    await page.waitForTimeout(2000);
+    const newPage = diag._earlyNewPage || (await newPagePromise);
+    delete diag._earlyNewPage;
     const targetPage = newPage || page;
     if (newPage) {
       diag.newPageOpened = true;
