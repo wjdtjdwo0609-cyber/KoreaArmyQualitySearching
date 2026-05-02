@@ -1124,9 +1124,17 @@ async function openRowDetail({ params, rowKey }) {
     const target = newPage || page;
     if (newPage) {
       await newPage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+      // 팝업 내부 iframe(specdocRgstOpenP 등)이 WebSquare 콘텐츠를 로드할
+      // 시간을 확보. domcontentloaded 후에도 iframe 내 동적 렌더링이 이어진다.
+      await newPage.waitForTimeout(3000);
+      // iframe 이 1개 이상 로드되면 각 frame의 load 도 대기
+      for (const frame of newPage.frames()) {
+        if (frame === newPage.mainFrame()) continue;
+        await frame.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
+      }
       await newPage.waitForTimeout(1500);
     } else {
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(2000);
     }
     return { context, page: target, rowMatch: clicked };
   } catch (e) {
