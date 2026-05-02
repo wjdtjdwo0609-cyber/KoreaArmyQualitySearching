@@ -1013,11 +1013,13 @@ async function openRowDetail({ params, rowKey }) {
       }
     }
 
-    // 지정 행(규격번호 일치) 클릭. 새 페이지/팝업이 열릴 수 있어 대기.
+    // 지정 행(규격번호 일치) 더블클릭. 새 페이지/팝업이 열릴 수 있어 대기.
+    // KDSIS 그리드는 single click이 아닌 dblclick 이벤트에 상세 팝업을 바인딩한다.
+    // (debug/detail 엔드포인트의 anchor-dblclick 전략으로 확인됨)
     const newPagePromise = context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
     // evaluate 안에서 .click() 을 직접 호출하면 user gesture 가 없어 KDSIS 가
     // window.open() 을 차단할 수 있다. 여기서는 매칭된 anchor 에 임시 마커만
-    // 부여하고 실제 클릭은 page.click() 으로 위임 — Playwright 가 진짜 마우스
+    // 부여하고 실제 클릭은 page.dblclick() 으로 위임 — Playwright 가 진짜 마우스
     // mousedown/mouseup 을 dispatch 하므로 popup blocker 와 WebSquare 위임
     // 핸들러가 모두 정상 동작한다.
     const matched = await page.evaluate(({ key, gridIds }) => {
@@ -1078,7 +1080,7 @@ async function openRowDetail({ params, rowKey }) {
     let clicked = false;
     if (matched && matched.ok) {
       try {
-        await page.click('[data-kdsis-detail-trigger="1"]', { timeout: 5000 });
+        await page.dblclick('[data-kdsis-detail-trigger="1"]', { timeout: 5000 });
         clicked = matched.fallbackFirstRow ? "fallback_first" : true;
       } catch (e) {
         matched.clickError = e.message ? e.message.slice(0, 200) : String(e);
