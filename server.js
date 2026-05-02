@@ -1124,15 +1124,26 @@ async function openRowDetail({ params, rowKey }) {
     const target = newPage || page;
     if (newPage) {
       await newPage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
-      // 팝업 내부 iframe(specdocRgstOpenP 등)이 WebSquare 콘텐츠를 로드할
-      // 시간을 확보. domcontentloaded 후에도 iframe 내 동적 렌더링이 이어진다.
-      await newPage.waitForTimeout(3000);
-      // iframe 이 1개 이상 로드되면 각 frame의 load 도 대기
+      await newPage.waitForTimeout(2000);
+      // iframe 로드 대기
       for (const frame of newPage.frames()) {
         if (frame === newPage.mainFrame()) continue;
-        await frame.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
+        await frame.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
       }
-      await newPage.waitForTimeout(1500);
+      // WebSquare가 AJAX로 데이터를 바인딩할 때까지 대기.
+      // 팝업 내 iframe에 실제 데이터(input/select 값)가 채워지면 준비 완료.
+      for (const frame of newPage.frames()) {
+        if (frame === newPage.mainFrame()) continue;
+        await frame.waitForFunction(() => {
+          // 아무 input/select 에 값이 들어왔으면 데이터 로드 완료
+          const inputs = document.querySelectorAll("input[type='text'], select");
+          for (const el of inputs) {
+            if (el.value && el.value.trim().length > 0) return true;
+          }
+          return false;
+        }, { timeout: 15000 }).catch(() => {});
+      }
+      await newPage.waitForTimeout(1000);
     } else {
       await page.waitForTimeout(2000);
     }
@@ -1276,7 +1287,7 @@ async function extractAttachments(page, opts = {}) {
       if (
         b.matched.length === 1 &&
         b.matched[0] === "scope-clickable" &&
-        /^(닫기|확인|취소|검색|목록|뒤로|이전|다음|엑셀다운로드|복사|초기화)$/.test(b.name.trim())
+        /^(닫기|확인|취소|검색|목록|뒤로|이전|다음|엑셀다운로드|복사|초기화|즐겨찾기|도움말|화면\s*갱신|프린터|달력에서\s*선택|X|\+)$/.test(b.name.trim())
       ) {
         continue;
       }
