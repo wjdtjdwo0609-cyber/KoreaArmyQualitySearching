@@ -943,6 +943,13 @@ async function _runSearchOnce(params) {
 // 세션 만료 윈도우도 없앤다.
 
 async function openRowDetail({ params, rowKey }) {
+  // rowKey(규격번호)가 있으면 검색 파라미터에 추가해서 결과를 좁힌다.
+  // 411건 전체를 스크롤하는 대신 해당 규격만 조회되므로 row-not-found 방지.
+  const searchParams = { ...params };
+  if (rowKey && !searchParams["규격번호"]) {
+    searchParams["규격번호"] = rowKey;
+  }
+
   const browser = await getBrowser();
   const context = await browser.newContext({
     locale: "ko-KR",
@@ -970,7 +977,7 @@ async function openRowDetail({ params, rowKey }) {
       throw new Error("KDSIS_BLOCKED");
     }
 
-    await fillSearchForm(page, params);
+    await fillSearchForm(page, searchParams);
     await clickSearchButton(page);
     await waitForGridResult(page);
     await page.waitForTimeout(1000);

@@ -1512,15 +1512,12 @@ function renderCardsHtml(data, rows, terms) {
       html += "</dl></details>";
     }
 
-    // KDSIS 첨부 스크래핑 + 다운로드 프록시는 KDSIS 가 화면을 자주 바꿔
-    // 매우 불안정했다. 사용자가 결국 원하는 건 "이 규격의 첨부파일을 손에
-    // 넣는 것" 이고, KDSIS 자체 사이트에서 받는 게 가장 확실하다.
-    // KDSIS 는 WebSquare 기반이라 URL 쿼리 prefill 이 불가능 — 그래서 클릭
-    // 한 번에 (1) 규격번호 클립보드 복사 (2) KDSIS 검색 페이지 새 탭. 사용자는
-    // 새 탭에서 Ctrl+V 한 번만 누르면 된다.
     if (specNo) {
-      html += `<div class="attach-block">`;
-      html += `<button type="button" class="attach-ext-link" data-open-kdsis="${esc(specNo)}" title="규격번호를 자동 복사하고 KDSIS 검색 페이지를 새 탭에서 엽니다 — 새 탭에서 Ctrl+V (또는 Cmd+V) 로 붙여넣고 검색하세요">🔗 KDSIS에서 ${esc(specNo)} 열기</button>`;
+      const paramsJson = data.searchParams ? JSON.stringify(data.searchParams) : "{}";
+      html += `<div class="attach-block" data-spec="${esc(specNo)}" data-params="${esc(paramsJson)}">`;
+      html += `<button type="button" class="attach-load-btn" aria-expanded="false">📎 첨부파일 보기</button>`;
+      html += `<div class="attach-panel" hidden></div>`;
+      html += `<button type="button" class="attach-ext-link" data-open-kdsis="${esc(specNo)}" title="규격번호를 자동 복사하고 KDSIS 검색 페이지를 새 탭에서 엽니다">🔗 KDSIS에서 ${esc(specNo)} 열기</button>`;
       html += `</div>`;
     }
 
