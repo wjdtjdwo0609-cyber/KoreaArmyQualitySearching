@@ -1927,8 +1927,11 @@ async function handleClickDelegated(e) {
     const block = attachBtn.closest(".attach-block");
     const panel = block ? block.querySelector(".attach-panel") : null;
     if (!block || !panel) return;
-    // Second click toggles visibility without re-fetching
-    if (block.dataset.loaded === "1") {
+    // Toggle visibility only if the panel was previously rendered with
+    // chips (rendered=1). Hover/auto prefetch sets loaded=1 to warm the
+    // badge but never renders chips, so a click on a prefetched row must
+    // still go through the fetch path to populate the panel.
+    if (block.dataset.rendered === "1") {
       const open = !panel.hidden;
       panel.hidden = open;
       attachBtn.setAttribute("aria-expanded", String(!open));
@@ -1987,8 +1990,22 @@ async function handleClickDelegated(e) {
             return `<a class="attach-chip" href="/api/attachment?${aqs}" download rel="noopener">📄 ${esc(name)}${size}</a>`;
           }).join("");
           panel.innerHTML = `<div class="attach-chips">${chips}</div>`;
+          // Auto-trigger 전체 다운로드 (zip bundle) right after the panel
+          // renders. Falls back to no-op if KDSIS didn't expose a bulk button.
+          const bulk = list.find((a) => a.name && a.name.trim() === "전체 다운로드");
+          if (bulk) {
+            const bqs = new URLSearchParams({ params: paramsJson, key: spec, id: String(bulk.id) }).toString();
+            const link = document.createElement("a");
+            link.href = `/api/attachment?${bqs}`;
+            link.download = "";
+            link.rel = "noopener";
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+          }
         }
         block.dataset.loaded = "1";
+        block.dataset.rendered = "1";
         block.dataset.count = String(list.length);
       }
     } catch (err) {
@@ -2150,6 +2167,53 @@ async function prefetchAttachments(uid, limit) {
   return { started: total, done: total };
 }
 messages.addEventListener("click", handleClickDelegated);
+
+// Hover prefetch: warm /api/detail when the cursor lingers on a 📎 button
+// for 200ms. Skips blocks already loaded or in-flight, and bails early on
+// pre-fetched (top-N auto) rows. Cleared on mouseout to avoid spamming
+// KDSIS when the cursor passes through quickly.
+const _hoverPrefetchTimers = new WeakMap();
+messages.addEventListener("mouseover", (e) => {
+  const btn = e.target.closest && e.target.closest(".attach-load-btn");
+  if (!btn) return;
+  const block = btn.closest(".attach-block");
+  if (!block) return;
+  if (block.dataset.loaded === "1" || block.dataset.probing === "1") return;
+  if (_hoverPrefetchTimers.has(block)) return;
+  const t = setTimeout(async () => {
+    _hoverPrefetchTimers.delete(block);
+    if (block.dataset.loaded === "1" || block.dataset.probing === "1") return;
+    const spec = block.dataset.spec;
+    const paramsJson = block.dataset.params;
+    if (!spec || !paramsJson) return;
+    block.dataset.probing = "1";
+    try {
+      const qs = new URLSearchParams({ params: paramsJson, key: spec }).toString();
+      const res = await fetch(`/api/detail?${qs}`);
+      if (!res.ok) return;
+      const body = await res.json();
+      const count = Array.isArray(body?.attachments) ? body.attachments.length : 0;
+      block.dataset.loaded = "1";
+      block.dataset.count = String(count);
+      setAttachBtnLabelFromCount(block, count);
+    } catch { /* silent — click path still works */ }
+    finally {
+      block.dataset.probing = "0";
+    }
+  }, 200);
+  _hoverPrefetchTimers.set(block, t);
+});
+messages.addEventListener("mouseout", (e) => {
+  const btn = e.target.closest && e.target.closest(".attach-load-btn");
+  if (!btn) return;
+  const block = btn.closest(".attach-block");
+  if (!block) return;
+  const t = _hoverPrefetchTimers.get(block);
+  if (t) {
+    clearTimeout(t);
+    _hoverPrefetchTimers.delete(block);
+  }
+});
 
 // Change events: sort select + page size select
 messages.addEventListener("change", (e) => {
