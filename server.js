@@ -22,6 +22,7 @@ const https = require("https");
 const { URL } = require("url");
 const path = require("path");
 const fs = require("fs");
+const zlib = require("zlib");
 const {
   cacheKey,
   createCache,
@@ -32,6 +33,8 @@ const {
   createByteBoundedCache,
   createConcurrentQueue,
   validateSearchBudget,
+  normalizeAttachmentName,
+  classifyAttachmentCandidate,
 } = require("./lib/runtime");
 
 const app = express();
@@ -1156,7 +1159,7 @@ async function openRowDetail({ params, rowKey }) {
     } else {
       await page.waitForTimeout(2000);
     }
-    return { context, page: target, rowMatch: clicked };
+    return { context, page: target, rowMatch: clicked, detailUrl: target.url() };
   } catch (e) {
     try { await context.close(); } catch {}
     throw e;
@@ -1184,6 +1187,44 @@ async function openRowDetailWithRetry({ params, rowKey }) {
     }
   }
   throw lastErr;
+}
+
+async function openKnownDetailUrl(detailUrl) {
+  if (!detailUrl || !/^https:\/\/kdsis\.dapa\.go\.kr\//i.test(detailUrl)) {
+    throw new Error("DETAIL_URL_UNAVAILABLE");
+  }
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    locale: "ko-KR",
+    ignoreHTTPSErrors: true,
+    acceptDownloads: true,
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    extraHTTPHeaders: { Referer: "https://kdsis.dapa.go.kr/" },
+  });
+  await context.route("**/*", (route) => {
+    const t = route.request().resourceType();
+    if (t === "image" || t === "font" || t === "media") return route.abort();
+    return route.continue();
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto("https://kdsis.dapa.go.kr/", { waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+    await page.goto(detailUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForTimeout(1500);
+    for (const frame of page.frames()) {
+      if (frame === page.mainFrame()) continue;
+      await frame.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+      await frame.waitForFunction(() => {
+        const body = document.body?.textContent || "";
+        return /규격서첨부|전체\s*다운로드|downloadAllFile/i.test(body + document.documentElement.outerHTML);
+      }, { timeout: 12000 }).catch(() => {});
+    }
+    return { context, page, detailUrl };
+  } catch (err) {
+    try { await context.close(); } catch {}
+    throw err;
+  }
 }
 
 // 상세 페이지(+ 서브프레임)에서 첨부 후보를 긁어온다. 반환 형태:
@@ -1289,35 +1330,22 @@ async function extractAttachments(page, opts = {}) {
       .catch(() => ({ hits: [] }));
 
     for (const b of batch.hits) {
-      const id = `${b.kind}|${b.name}|${b.href}|${b.onclick}|${b.val}`;
+      const classified = classifyAttachmentCandidate(b);
+      if (!classified) continue;
+
+      const id = `${classified.action}|${classified.name}|${b.kind}|${b.href}|${b.onclick}|${b.val}`;
       if (seen.has(id)) continue;
-      // "scope-clickable" 만 걸린 것 중 "닫기", "취소", "검색" 같은 명백한
-      // non-첨부 버튼은 이름으로 배제.
-      if (
-        b.matched.length === 1 &&
-        b.matched[0] === "scope-clickable" &&
-        /^(닫기|확인|취소|검색|목록|뒤로|이전|다음|엑셀다운로드|복사|초기화|즐겨찾기|도움말|화면\s*갱신|프린터|달력에서\s*선택|열기|다운로드|X|\+)$/.test(b.name.trim())
-      ) {
-        continue;
-      }
-      // 자재번호(NSN, 보통 13자리 숫자) — 다른 규격으로의 navigate 링크라
-      // 첨부로 잡히면 사용자가 다운로드 시 404. 순수 숫자 8~15자리는 제외.
-      if (
-        b.matched.length === 1 &&
-        b.matched[0] === "scope-clickable" &&
-        /^\d{8,15}$/.test(b.name.trim())
-      ) {
-        continue;
-      }
       seen.set(id, true);
       out.push({
         id: String(out.length),
-        name: b.name,
-        kind: b.kind,
+        name: classified.name,
+        kind: classified.kind,
+        action: classified.action,
         tag: b.tag,
         href: b.href || null,
         onclick: b.onclick || null,
         val: b.val || null,
+        rawName: b.name || null,
         matched: b.matched,
         frameUrl: frame.url().slice(0, 200),
       });
@@ -1355,23 +1383,201 @@ async function extractAttachments(page, opts = {}) {
   return out;
 }
 
+function _zipNameVariants(name) {
+  const n = normalizeAttachmentName(name);
+  const withoutViewPrefix = normalizeAttachmentName(n.replace(/^\[열람\]\s*/i, ""));
+  const base = normalizeAttachmentName(n.split(/[\\/]/).pop());
+  const baseWithoutViewPrefix = normalizeAttachmentName(base.replace(/^\[열람\]\s*/i, ""));
+  return [...new Set([n, withoutViewPrefix, base, baseWithoutViewPrefix].filter(Boolean))];
+}
+
+function _readZipEntries(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 22) return [];
+
+  let eocd = -1;
+  const min = Math.max(0, buffer.length - 65_557);
+  for (let i = buffer.length - 22; i >= min; i--) {
+    if (buffer.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return [];
+
+  const total = buffer.readUInt16LE(eocd + 10);
+  const cdOffset = buffer.readUInt32LE(eocd + 16);
+  const entries = [];
+  let p = cdOffset;
+
+  for (let i = 0; i < total && p + 46 <= buffer.length; i++) {
+    if (buffer.readUInt32LE(p) !== 0x02014b50) break;
+    const flags = buffer.readUInt16LE(p + 8);
+    const method = buffer.readUInt16LE(p + 10);
+    const compressedSize = buffer.readUInt32LE(p + 20);
+    const uncompressedSize = buffer.readUInt32LE(p + 24);
+    const nameLen = buffer.readUInt16LE(p + 28);
+    const extraLen = buffer.readUInt16LE(p + 30);
+    const commentLen = buffer.readUInt16LE(p + 32);
+    const localOffset = buffer.readUInt32LE(p + 42);
+    const rawName = buffer.slice(p + 46, p + 46 + nameLen);
+    // KDSIS/DEXT currently emits UTF-8 names for the files we verified. If a
+    // future zip uses CP949, this still works for ASCII-heavy spec numbers.
+    const name = rawName.toString(flags & 0x0800 ? "utf8" : "utf8");
+    entries.push({ name, method, compressedSize, uncompressedSize, localOffset });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+function _extractZipEntry(buffer, wantedNames) {
+  const wanted = new Set(
+    wantedNames.flatMap(_zipNameVariants).map((n) => normalizeAttachmentName(n).toLowerCase())
+  );
+  for (const e of _readZipEntries(buffer)) {
+    const variants = _zipNameVariants(e.name).map((n) => normalizeAttachmentName(n).toLowerCase());
+    if (!variants.some((v) => wanted.has(v))) continue;
+    const lo = e.localOffset;
+    if (lo + 30 > buffer.length || buffer.readUInt32LE(lo) !== 0x04034b50) continue;
+    const nameLen = buffer.readUInt16LE(lo + 26);
+    const extraLen = buffer.readUInt16LE(lo + 28);
+    const dataStart = lo + 30 + nameLen + extraLen;
+    const dataEnd = dataStart + e.compressedSize;
+    if (dataEnd > buffer.length) continue;
+    const compressed = buffer.slice(dataStart, dataEnd);
+    let data;
+    try {
+      if (e.method === 0) data = compressed;
+      else if (e.method === 8) data = zlib.inflateRawSync(compressed);
+      else continue;
+    } catch (err) {
+      console.warn(`[zip] inflate failed for ${e.name}: ${err.message}`);
+      continue;
+    }
+    if (e.uncompressedSize && data.length !== e.uncompressedSize) {
+      // Some zips use data descriptors; do not reject on size mismatch, but log
+      // enough to diagnose if KDSIS changes its archive writer.
+      console.warn(`[zip] size mismatch for ${e.name}: ${data.length}/${e.uncompressedSize}`);
+    }
+    return { buffer: data, filename: normalizeAttachmentName(e.name), contentType: "application/octet-stream" };
+  }
+  return null;
+}
+
 // Returns { buffer, filename, contentType } for a single attachment descriptor.
 // Uses page.on('download') so both JS-triggered and direct-link clicks funnel
 // through the same Playwright download pipeline — no need for a separate
 // fetch() path.
 async function triggerDownload(page, attachment) {
-  // extractAttachments 가 a/button/span/li/input 등 다양한 태그를 반환하므로
-  // 여기서도 같은 태그 집합을 훑으며 이름+href+onclick 지문으로 매칭한다.
-  const TAGS = "a, button, span, li, tr, div, input";
+  const readDownload = async (dl) => {
+    const stream = await dl.createReadStream();
+    const chunks = [];
+    await new Promise((resolve, reject) => {
+      stream.on("data", (c) => chunks.push(c));
+      stream.on("end", resolve);
+      stream.on("error", reject);
+    });
+    const buffer = Buffer.concat(chunks);
+    return {
+      buffer,
+      filename: dl.suggestedFilename() || attachment.name,
+      contentType: "application/octet-stream",
+    };
+  };
+
+  const waitForDownloadAfter = async (action) => {
+    const downloadPromise = page.waitForEvent("download", { timeout: 20000 }).catch(() => null);
+    const ok = await action();
+    if (!ok) return null;
+    const dl = await downloadPromise;
+    return dl ? readDownload(dl) : null;
+  };
+
+  // DEXT5 file rows are not downloads by themselves. The browser must first
+  // select a file row, then press the component's "다운로드" button.
+  if (attachment.action === "download-file") {
+    const wanted = normalizeAttachmentName(attachment.name);
+    for (const frame of page.frames()) {
+      const selected = await frame.evaluate((meta) => {
+        const norm = (v) => String(v || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+        const els = Array.from(document.querySelectorAll("a, button, span, li, tr, div, input"));
+        const target = els.find((el) => {
+          const href = el.getAttribute("href") || "";
+          const onclick = el.getAttribute("onclick") || "";
+          const val = el.getAttribute("value") || "";
+          const text = el.textContent || "";
+          const name = norm(text || val || href);
+          if (!name) return false;
+          if (name !== meta.name) return false;
+          if (meta.href && href !== meta.href) return false;
+          if (meta.onclick && onclick !== meta.onclick) return false;
+          return true;
+        });
+        if (!target) return false;
+        target.scrollIntoView({ block: "center", inline: "center" });
+        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+        target.click();
+        return true;
+      }, { ...attachment, name: wanted }).catch(() => false);
+      if (!selected) continue;
+
+      await page.waitForTimeout(250);
+      const file = await waitForDownloadAfter(() =>
+        frame.evaluate(() => {
+          const norm = (v) => String(v || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+          const btn =
+            document.getElementById("button_download") ||
+            Array.from(document.querySelectorAll("button, input, a")).find((el) => {
+              const onclick = el.getAttribute("onclick") || "";
+              const val = el.getAttribute("value") || "";
+              const text = el.textContent || "";
+              return /downloadFile/i.test(onclick) || norm(text || val) === "다운로드";
+            });
+          if (!btn) return false;
+          btn.scrollIntoView({ block: "center", inline: "center" });
+          btn.click();
+          return true;
+        }).catch(() => false)
+      );
+      if (file) return file;
+    }
+  }
+
+  if (attachment.action === "download-all") {
+    for (const frame of page.frames()) {
+      const file = await waitForDownloadAfter(() =>
+        frame.evaluate(() => {
+          const norm = (v) => String(v || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+          const btn =
+            document.getElementById("button_download_all") ||
+            Array.from(document.querySelectorAll("button, input, a")).find((el) => {
+              const onclick = el.getAttribute("onclick") || "";
+              const val = el.getAttribute("value") || "";
+              const text = el.textContent || "";
+              return /downloadAllFile/i.test(onclick) || norm(text || val) === "전체 다운로드";
+            });
+          if (!btn) return false;
+          btn.scrollIntoView({ block: "center", inline: "center" });
+          btn.click();
+          return true;
+        }).catch(() => false)
+      );
+      if (file) return file;
+    }
+  }
+
+  // Direct links are rare on KDSIS, but keep the generic fallback for other
+  // attachment renderings that really are normal anchors/buttons.
   for (const frame of page.frames()) {
     const ok = await frame.evaluate((meta) => {
+      const norm = (v) => String(v || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
       const els = document.querySelectorAll("a, button, span, li, tr, div, input");
       for (const el of els) {
         const href = el.getAttribute("href") || "";
         const onclick = el.getAttribute("onclick") || "";
         const val = el.getAttribute("value") || "";
         const text = (el.textContent || "").trim();
-        const name = (text || val || href).slice(0, 200);
+        const name = norm(text || val || href).slice(0, 200);
         if (name === meta.name && href === (meta.href || "") && onclick === (meta.onclick || "")) {
           el.scrollIntoView({ block: "center" });
           return true;
@@ -1381,32 +1587,20 @@ async function triggerDownload(page, attachment) {
     }, attachment).catch(() => false);
     if (!ok) continue;
 
-    const downloadPromise = page.waitForEvent("download", { timeout: 20000 }).catch(() => null);
-    await frame.evaluate((meta) => {
-      const els = document.querySelectorAll("a, button, span, li, tr, div, input");
-      for (const el of els) {
-        const text = (el.textContent || "").trim();
-        const val = el.getAttribute("value") || "";
-        const name = (text || val || el.getAttribute("href") || "").slice(0, 200);
-        if (name === meta.name) { el.click(); return; }
-      }
-    }, attachment).catch(() => {});
-    const dl = await downloadPromise;
-    if (dl) {
-      const stream = await dl.createReadStream();
-      const chunks = [];
-      await new Promise((resolve, reject) => {
-        stream.on("data", (c) => chunks.push(c));
-        stream.on("end", resolve);
-        stream.on("error", reject);
-      });
-      const buffer = Buffer.concat(chunks);
-      return {
-        buffer,
-        filename: dl.suggestedFilename() || attachment.name,
-        contentType: "application/octet-stream",
-      };
-    }
+    const file = await waitForDownloadAfter(() =>
+      frame.evaluate((meta) => {
+        const norm = (v) => String(v || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+        const els = document.querySelectorAll("a, button, span, li, tr, div, input");
+        for (const el of els) {
+          const text = (el.textContent || "").trim();
+          const val = el.getAttribute("value") || "";
+          const name = norm(text || val || el.getAttribute("href") || "").slice(0, 200);
+          if (name === meta.name) { el.click(); return true; }
+        }
+        return false;
+      }, attachment).catch(() => false)
+    );
+    if (file) return file;
     // JS click이 새 탭 navigation으로 끝나는 사이트도 있음 — 현재 URL이 파일이면 스트림
     break;
   }
@@ -2515,7 +2709,9 @@ app.get("/api/detail/cached", (req, res) => {
   if (!params || !rowKey) return res.json({ cached: false });
   const entry = detailCache.get(`${cacheKey(params)}|${rowKey}`);
   if (!entry) return res.json({ cached: false });
-  const count = Array.isArray(entry.attachments) ? entry.attachments.length : 0;
+  const count = Array.isArray(entry.attachments)
+    ? entry.attachments.filter((a) => a.action !== "download-all").length
+    : 0;
   res.json({ cached: true, count });
 });
 
@@ -2542,19 +2738,19 @@ app.get("/api/detail", async (req, res) => {
   const includeHtml = req.query.html === "1";
   try {
     const result = await downloadPool.run(async () => {
-      const { context, page } = await openRowDetailWithRetry({ params, rowKey });
+      const { context, page, detailUrl } = await openRowDetailWithRetry({ params, rowKey });
       try {
         const ext = await extractAttachments(page, { includeHtml });
         if (includeHtml && ext && Array.isArray(ext.attachments)) {
-          return { attachments: ext.attachments, html: ext.html, rowKey };
+          return { attachments: ext.attachments, html: ext.html, rowKey, detailUrl };
         }
-        return { attachments: ext, rowKey };
+        return { attachments: ext, rowKey, detailUrl };
       } finally {
         try { await context.close(); } catch {}
       }
     });
     // html 은 캐시에 넣지 않는다(60KB×N → 메모리 폭증). 응답에만 동봉.
-    const cacheable = { attachments: result.attachments, rowKey: result.rowKey };
+    const cacheable = { attachments: result.attachments, rowKey: result.rowKey, detailUrl: result.detailUrl };
     detailCache.set(cacheK, cacheable);
     res.json(result);
   } catch (err) {
@@ -2598,20 +2794,65 @@ app.get("/api/attachment", async (req, res) => {
     return res.end(cachedBytes.buffer);
   }
 
+  const metaKey = `${cacheKey(params)}|${rowKey}`;
+  let meta = detailCache.get(metaKey);
+  let attachment = meta?.attachments?.find((a) => a.id === attachId);
+  const bulk = meta?.attachments?.find((a) => a.action === "download-all");
+  const bulkBytesKey = bulk ? `${cacheKey(params)}|${rowKey}|${bulk.id}` : null;
+  const cachedBulk = bulkBytesKey ? attachCache.get(bulkBytesKey) : null;
+  if (attachment?.action === "download-file" && cachedBulk?.buffer) {
+    const extracted = _extractZipEntry(cachedBulk.buffer, [attachment.name, attachment.rawName]);
+    if (extracted) {
+      attachCache.set(bytesKey, extracted, extracted.buffer.length);
+      res.setHeader("Content-Type", extracted.contentType || "application/octet-stream");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename*=UTF-8''${encodeURIComponent(extracted.filename || attachment.name || "download")}`
+      );
+      return res.end(extracted.buffer);
+    }
+  }
+
   try {
     const file = await downloadPool.run(async () => {
       // 첨부 메타를 먼저 확보 (캐시 우선).
-      const metaKey = `${cacheKey(params)}|${rowKey}`;
-      let meta = detailCache.get(metaKey);
-      const { context, page } = await openRowDetailWithRetry({ params, rowKey });
+      let opened;
+      try {
+        opened = meta?.detailUrl
+          ? await openKnownDetailUrl(meta.detailUrl)
+          : await openRowDetailWithRetry({ params, rowKey });
+      } catch (err) {
+        if (!meta?.detailUrl) throw err;
+        console.warn(`[detail-url-fallback] ${err.message}`);
+        opened = await openRowDetailWithRetry({ params, rowKey });
+      }
+      const { context, page } = opened;
       try {
         if (!meta) {
           const attachments = await extractAttachments(page);
-          meta = { attachments, rowKey };
+          meta = { attachments, rowKey, detailUrl: opened.detailUrl || page.url() };
           detailCache.set(metaKey, meta);
         }
-        const attachment = meta.attachments.find((a) => a.id === attachId);
+        attachment = meta.attachments.find((a) => a.id === attachId);
         if (!attachment) throw new Error("ATTACHMENT_NOT_FOUND");
+
+        // Fast path for DEXT file rows: fetch the stable "전체 다운로드" zip once,
+        // then serve individual files from that archive. This avoids the slower
+        // per-file DEXT selection/download path that can exceed gateway limits.
+        if (attachment.action === "download-file") {
+          const bulkAttachment = meta.attachments.find((a) => a.action === "download-all");
+          if (bulkAttachment) {
+            const zipKey = `${cacheKey(params)}|${rowKey}|${bulkAttachment.id}`;
+            let zipFile = attachCache.get(zipKey);
+            if (!zipFile) {
+              zipFile = await triggerDownload(page, bulkAttachment);
+              attachCache.set(zipKey, zipFile, zipFile.buffer.length);
+            }
+            const extracted = _extractZipEntry(zipFile.buffer, [attachment.name, attachment.rawName]);
+            if (extracted) return extracted;
+          }
+        }
+
         const dl = await triggerDownload(page, attachment);
         return dl;
       } finally {
