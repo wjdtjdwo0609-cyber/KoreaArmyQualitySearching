@@ -1514,7 +1514,7 @@ function renderCardsHtml(data, rows, terms) {
 
     if (specNo) {
       const paramsJson = data.searchParams ? JSON.stringify(data.searchParams) : "{}";
-      html += `<div class="attach-block" data-spec="${esc(specNo)}" data-params="${esc(paramsJson)}">`;
+      html += `<div class="attach-block" data-spec="${esc(specNo)}" data-params="${esc(paramsJson).replaceAll('"', "&quot;")}">`;
       html += `<button type="button" class="attach-load-btn" aria-expanded="false">📎 첨부파일 보기</button>`;
       html += `<div class="attach-panel" hidden></div>`;
       html += `<button type="button" class="attach-ext-link" data-open-kdsis="${esc(specNo)}" title="규격번호를 자동 복사하고 KDSIS 검색 페이지를 새 탭에서 엽니다">🔗 KDSIS에서 ${esc(specNo)} 열기</button>`;
