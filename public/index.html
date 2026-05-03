@@ -1634,10 +1634,11 @@ function addResultMessage(data) {
   if (restoredSort || restoredPage > 0 || restoredPageSize !== defaultPageSize) {
     rerender(uid);
   }
-  // Warm the detail cache for the top N rows so the first 📎 click feels
-  // instant. Re-enabled after dblclick + iframe + WebSquare-binding waits
-  // stabilized popup scraping; previously removed when scraping was flaky.
-  setTimeout(() => prefetchAttachments(uid, ATTACH_PREFETCH_AUTO_N), 100);
+  // Attachment detail calls are expensive KDSIS popup sessions. Keep them
+  // click-driven by default instead of warming rows automatically.
+  if (ATTACH_PREFETCH_AUTO_N > 0) {
+    setTimeout(() => prefetchAttachments(uid, ATTACH_PREFETCH_AUTO_N), 100);
+  }
 }
 
 // Slice rows for the given page; pageSize 0 means "all in one page"
@@ -1987,12 +1988,14 @@ async function handleClickDelegated(e) {
             const name = String(a.name || id || "파일");
             const aqs = new URLSearchParams({ params: paramsJson, key: spec, id }).toString();
             const size = a.size ? ` <span class="attach-size">(${esc(a.size)})</span>` : "";
-            return `<a class="attach-chip" href="/api/attachment?${aqs}" download rel="noopener">📄 ${esc(name)}${size}</a>`;
+            const icon = a.action === "download-all" ? "📦" : "📄";
+            const label = a.action === "download-all" ? "전체 ZIP 다운로드" : name;
+            return `<a class="attach-chip" href="/api/attachment?${aqs}" download rel="noopener">${icon} ${esc(label)}${size}</a>`;
           }).join("");
           panel.innerHTML = `<div class="attach-chips">${chips}</div>`;
           // Auto-trigger 전체 다운로드 (zip bundle) right after the panel
           // renders. Falls back to no-op if KDSIS didn't expose a bulk button.
-          const bulk = list.find((a) => a.name && a.name.trim() === "전체 다운로드");
+          const bulk = list.find((a) => a.action === "download-all" || (a.name && a.name.trim() === "전체 다운로드"));
           if (bulk) {
             const bqs = new URLSearchParams({ params: paramsJson, key: spec, id: String(bulk.id) }).toString();
             const link = document.createElement("a");
@@ -2004,9 +2007,10 @@ async function handleClickDelegated(e) {
             link.remove();
           }
         }
+        const fileCount = list.filter((a) => a.action !== "download-all").length;
         block.dataset.loaded = "1";
         block.dataset.rendered = "1";
-        block.dataset.count = String(list.length);
+        block.dataset.count = String(fileCount);
       }
     } catch (err) {
       panel.innerHTML = `<div class="attach-err">네트워크 오류: ${esc(err.message || err)}</div>`;
@@ -2074,8 +2078,9 @@ async function precheckAttachmentsDom(root) {
 //    right after the result card renders so the user sees "📎 첨부 N개" /
 //    "📎 첨부 없음" badges appearing one by one without clicking each row.
 //    The rest ("더 스캔 (+10)" button) lets the user expand coverage on demand.
-const ATTACH_PREFETCH_AUTO_N = 10;     // 자동 프리페치 배치 크기
+const ATTACH_PREFETCH_AUTO_N = 0;      // KDSIS 차단 방지를 위해 기본 자동 프리페치 비활성화
 const ATTACH_PREFETCH_CONCURRENCY = 2; // 동시 /api/detail 호출 수 — 서버 다운로드 풀과 맞춤
+const ATTACH_HOVER_PREFETCH = false;   // hover만으로 외부 사이트를 때리지 않게 기본 비활성화
 const attachPrefetchCursor = new Map(); // uid → 다음에 스캔할 row 인덱스(offset)
 
 // 최소 동시성 N짜리 클라이언트 큐. 각 fn 은 async () => void 이고
@@ -2145,7 +2150,9 @@ async function prefetchAttachments(uid, limit) {
       const res = await fetch(`/api/detail?${qs}`);
       if (!res.ok) return;
       const body = await res.json();
-      const count = Array.isArray(body?.attachments) ? body.attachments.length : 0;
+      const count = Array.isArray(body?.attachments)
+        ? body.attachments.filter((a) => a.action !== "download-all").length
+        : 0;
       block.dataset.loaded = "1";
       block.dataset.count = String(count);
       setAttachBtnLabelFromCount(block, count);
@@ -2174,6 +2181,7 @@ messages.addEventListener("click", handleClickDelegated);
 // KDSIS when the cursor passes through quickly.
 const _hoverPrefetchTimers = new WeakMap();
 messages.addEventListener("mouseover", (e) => {
+  if (!ATTACH_HOVER_PREFETCH) return;
   const btn = e.target.closest && e.target.closest(".attach-load-btn");
   if (!btn) return;
   const block = btn.closest(".attach-block");
@@ -2192,7 +2200,9 @@ messages.addEventListener("mouseover", (e) => {
       const res = await fetch(`/api/detail?${qs}`);
       if (!res.ok) return;
       const body = await res.json();
-      const count = Array.isArray(body?.attachments) ? body.attachments.length : 0;
+      const count = Array.isArray(body?.attachments)
+        ? body.attachments.filter((a) => a.action !== "download-all").length
+        : 0;
       block.dataset.loaded = "1";
       block.dataset.count = String(count);
       setAttachBtnLabelFromCount(block, count);

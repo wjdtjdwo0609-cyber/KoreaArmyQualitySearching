@@ -18,6 +18,8 @@ const {
   createConcurrentQueue,
   validateSearchBudget,
   projectScrollCoverage,
+  normalizeAttachmentName,
+  classifyAttachmentCandidate,
 } = require("../lib/runtime");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -491,4 +493,59 @@ test("projectScrollCoverage: MAX_SCROLLS=25 covers 230 rows", () => {
 test("projectScrollCoverage: unknown totalCount returns sufficient=true", () => {
   const r = projectScrollCoverage({ totalCount: 0, maxScrolls: 5 });
   assert.equal(r.sufficient, true);
+});
+
+// ── DEXT attachment candidate classification ───────────────────────────────
+
+test("normalizeAttachmentName: collapses NBSP and whitespace", () => {
+  assert.equal(normalizeAttachmentName("KDS\u00a01005-0483-6.pdf\n"), "KDS 1005-0483-6.pdf");
+});
+
+test("classifyAttachmentCandidate: file row becomes select-then-download target", () => {
+  assert.deepEqual(
+    classifyAttachmentCandidate({
+      name: "KDS\u00a01005-0483-6.hwp",
+      kind: "js",
+      matched: ["text-ext"],
+    }),
+    {
+      name: "KDS 1005-0483-6.hwp",
+      kind: "dext-file",
+      action: "download-file",
+    }
+  );
+});
+
+test("classifyAttachmentCandidate: whole-download button becomes bulk zip target", () => {
+  assert.deepEqual(
+    classifyAttachmentCandidate({
+      name: "전체 다운로드",
+      onclick: "downloadAllFile(event);",
+      matched: ["onclick-dl"],
+    }),
+    {
+      name: "전체 다운로드",
+      kind: "dext-bulk",
+      action: "download-all",
+    }
+  );
+});
+
+test("classifyAttachmentCandidate: DEXT chrome buttons are not attachments", () => {
+  assert.equal(
+    classifyAttachmentCandidate({
+      name: "다운로드",
+      onclick: "downloadFile(event);",
+      matched: ["onclick-dl"],
+    }),
+    null
+  );
+  assert.equal(
+    classifyAttachmentCandidate({
+      name: "열기",
+      onclick: "openFile(event);",
+      matched: ["onclick-dl"],
+    }),
+    null
+  );
 });
