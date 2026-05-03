@@ -1619,9 +1619,6 @@ function addResultMessage(data) {
   }
 
   addBotMessage(html, { skipPersist: true });
-  // 첨부 자동 프리페치/스캔은 KDSIS 상세 팝업 스크래핑이 너무 불안정해서
-  // 제거됐다. 대신 각 행 카드에 "🔗 KDSIS 에서 열기" 외부 링크가 있어
-  // 사용자가 KDSIS 사이트에서 직접 받을 수 있다.
   // Persist structured payload so we can re-render after reload without re-fetching
   pushEvent({
     type: "result",
@@ -1637,6 +1634,10 @@ function addResultMessage(data) {
   if (restoredSort || restoredPage > 0 || restoredPageSize !== defaultPageSize) {
     rerender(uid);
   }
+  // Warm the detail cache for the top N rows so the first 📎 click feels
+  // instant. Re-enabled after dblclick + iframe + WebSquare-binding waits
+  // stabilized popup scraping; previously removed when scraping was flaky.
+  setTimeout(() => prefetchAttachments(uid, ATTACH_PREFETCH_AUTO_N), 100);
 }
 
 // Slice rows for the given page; pageSize 0 means "all in one page"
