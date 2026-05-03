@@ -113,7 +113,7 @@ const _inFlight = new Map();   // key → Promise<results>
 // Playwright 컨텍스트로 OOM 위험. 다운로드는 1로 낮춰 메모리 압박 줄이기.
 // (배치 검색은 여전히 동시성 2 로 활용 가능 — 검색이 다운로드보다 더 자주
 // 발생하는 작업.)
-const DOWNLOAD_CONCURRENCY = Number(process.env.KDSIS_DOWNLOAD_CONCURRENCY || 1);
+const DOWNLOAD_CONCURRENCY = Number(process.env.KDSIS_DOWNLOAD_CONCURRENCY || 2);
 const downloadPool = createConcurrentQueue(DOWNLOAD_CONCURRENCY);
 
 // Metadata cache: { attachments: [...] } keyed by params + row-key.
@@ -962,6 +962,13 @@ async function openRowDetail({ params, rowKey }) {
     // to render the full form in the popup mode. Harmless if ignored.
     extraHTTPHeaders: { Referer: "https://kdsis.dapa.go.kr/" },
   });
+  // Block heavy non-essential resources to speed up page load. CSS is kept
+  // because WebSquare visibility checks rely on computed styles.
+  await context.route("**/*", (route) => {
+    const t = route.request().resourceType();
+    if (t === "image" || t === "font" || t === "media") return route.abort();
+    return route.continue();
+  });
   try {
     const page = await context.newPage();
     await navigateToKdsis(page);
@@ -1288,6 +1295,15 @@ async function extractAttachments(page, opts = {}) {
         b.matched.length === 1 &&
         b.matched[0] === "scope-clickable" &&
         /^(닫기|확인|취소|검색|목록|뒤로|이전|다음|엑셀다운로드|복사|초기화|즐겨찾기|도움말|화면\s*갱신|프린터|달력에서\s*선택|열기|다운로드|X|\+)$/.test(b.name.trim())
+      ) {
+        continue;
+      }
+      // 자재번호(NSN, 보통 13자리 숫자) — 다른 규격으로의 navigate 링크라
+      // 첨부로 잡히면 사용자가 다운로드 시 404. 순수 숫자 8~15자리는 제외.
+      if (
+        b.matched.length === 1 &&
+        b.matched[0] === "scope-clickable" &&
+        /^\d{8,15}$/.test(b.name.trim())
       ) {
         continue;
       }
