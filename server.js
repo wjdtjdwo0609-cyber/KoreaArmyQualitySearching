@@ -132,8 +132,10 @@ const attachCache = createByteBoundedCache({
 
 // Per-IP rate limiter shared by /api/detail and /api/attachment. KDSIS has
 // historically IP-blocked callers that hammer it; we cap each client so a
-// single misbehaving user can't exhaust our KDSIS budget.
-const DOWNLOAD_RATE_LIMIT = Number(process.env.KDSIS_DOWNLOAD_RATE_LIMIT || 10);
+// single misbehaving user can't exhaust our KDSIS budget. Sized for the
+// auto-prefetch (top 10) + hover prefetch + click pattern: 10 prefetch +
+// some hovers + a few clicks easily exceeds 10/min, so default is 30/min.
+const DOWNLOAD_RATE_LIMIT = Number(process.env.KDSIS_DOWNLOAD_RATE_LIMIT || 30);
 const DOWNLOAD_RATE_WINDOW_MS = Number(process.env.KDSIS_DOWNLOAD_RATE_WINDOW_MS || 60_000);
 const downloadRateLimiter = createRateLimiter({
   windowMs: DOWNLOAD_RATE_WINDOW_MS,
