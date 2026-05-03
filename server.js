@@ -1287,7 +1287,7 @@ async function extractAttachments(page, opts = {}) {
       if (
         b.matched.length === 1 &&
         b.matched[0] === "scope-clickable" &&
-        /^(닫기|확인|취소|검색|목록|뒤로|이전|다음|엑셀다운로드|복사|초기화|즐겨찾기|도움말|화면\s*갱신|프린터|달력에서\s*선택|열기|다운로드|전체\s*다운로드|X|\+)$/.test(b.name.trim())
+        /^(닫기|확인|취소|검색|목록|뒤로|이전|다음|엑셀다운로드|복사|초기화|즐겨찾기|도움말|화면\s*갱신|프린터|달력에서\s*선택|열기|다운로드|X|\+)$/.test(b.name.trim())
       ) {
         continue;
       }
