@@ -125,7 +125,7 @@ const DOWNLOAD_STEP_TIMEOUT_MS = Number(process.env.KDSIS_DOWNLOAD_STEP_TIMEOUT_
 const DOWNLOAD_QUIET_MS = Number(process.env.KDSIS_DOWNLOAD_QUIET_MS || 900);
 const DOWNLOAD_BUNDLE_TIMEOUT_MS = Number(process.env.KDSIS_DOWNLOAD_BUNDLE_TIMEOUT_MS || 180_000);
 const DOWNLOAD_BUNDLE_MAX_DETAILS = Number(process.env.KDSIS_DOWNLOAD_BUNDLE_MAX_DETAILS || 10);
-const ATTACHMENT_RENDER_WAIT_MS = Number(process.env.KDSIS_ATTACHMENT_RENDER_WAIT_MS || 8_000);
+const ATTACHMENT_RENDER_WAIT_MS = Number(process.env.KDSIS_ATTACHMENT_RENDER_WAIT_MS || 30_000);
 
 // Metadata cache: { attachments: [...] } keyed by params + row-key.
 const DETAIL_TTL_MS = Number(process.env.KDSIS_DETAIL_TTL_MS || 600_000);
@@ -1426,10 +1426,12 @@ async function waitForAttachmentRender(page, timeoutMs = ATTACHMENT_RENDER_WAIT_
       frames: frames.slice(0, 5),
     };
     if (last.fileFrames > 0) return { ok: true, reason: "file-rendered", ...last };
-    if (last.sectionFrames > 0 && last.emptyFrames > 0) return { ok: true, reason: "empty-rendered", ...last };
+    // "데이터가 없음" may belong to another detail grid such as related stock
+    // or cited standards. Do not treat it as "no attachments"; wait until a
+    // real filename appears or the full timeout expires.
     await page.waitForTimeout(350).catch(() => {});
   }
-  return { ok: false, reason: "attachment-render-timeout", ...last };
+  return { ok: false, reason: "file-not-rendered-timeout", ...last };
 }
 
 // 상세 페이지(+ 서브프레임)에서 첨부 후보를 긁어온다. 반환 형태:
