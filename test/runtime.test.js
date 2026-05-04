@@ -20,6 +20,8 @@ const {
   projectScrollCoverage,
   normalizeAttachmentName,
   classifyAttachmentCandidate,
+  buildKdsisDetailPopupUrl,
+  extractKdsisDetailPopupUrl,
 } = require("../lib/runtime");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -548,4 +550,39 @@ test("classifyAttachmentCandidate: DEXT chrome buttons are not attachments", () 
     }),
     null
   );
+});
+
+// ── KDSIS detail popup URL extraction ─────────────────────
+
+test("buildKdsisDetailPopupUrl: constructs a standard-detail popup URL", () => {
+  const oid = "I20251229153036419369883223060";
+  const url = new URL(buildKdsisDetailPopupUrl({ tchdataHistryOid: oid }));
+  assert.equal(url.origin, "https://kdsis.dapa.go.kr");
+  assert.equal(url.pathname, "/websquare/popup.do");
+  assert.equal(url.searchParams.get("dapaup"), "/ui/sm/stdrdMgt/srch/opnSrch/viewTchdataOpenP.xml");
+  assert.equal(url.searchParams.get("popupFlag"), "Y");
+  assert.equal(url.searchParams.get("viewByTchdataHistryOid"), "Y");
+  assert.equal(url.searchParams.get("tchdataHistryOid"), oid);
+  assert.equal(url.searchParams.get("dtaDvsCd"), "I");
+  assert.equal(url.searchParams.get("popupID"), "_SM_TCHDATA_VIEW_POPUP");
+});
+
+test("extractKdsisDetailPopupUrl: builds from grid API row JSON containing an OID", () => {
+  const url = new URL(extractKdsisDetailPopupUrl(JSON.stringify({
+    specno: "STD-0001",
+    dtaNm: "섬유제품류 검사기준",
+    tchdataHistryOid: "I20251229153036419369883223060",
+    dtaDvsCd: "I",
+  })));
+  assert.equal(url.searchParams.get("tchdataHistryOid"), "I20251229153036419369883223060");
+  assert.equal(url.searchParams.get("dtaDvsCd"), "I");
+});
+
+test("extractKdsisDetailPopupUrl: normalizes an existing popup URL", () => {
+  const raw =
+    "/websquare/popup.do?dapaup=/ui/sm/stdrdMgt/srch/opnSrch/viewTchdataOpenP.xml&popupFlag=Y&viewByTchdataHistryOid=Y&tchdataHistryOid=I20251229153036419369883223060&dtaDvsCd=I&specno=&datano=&drwngno=&cmpntsMasterOid=&popupID=_SM_TCHDATA_VIEW_POPUP&w2xHome=/ui/cm/popup/&w2xDocumentRoot=";
+  const url = new URL(extractKdsisDetailPopupUrl(raw));
+  assert.equal(url.origin, "https://kdsis.dapa.go.kr");
+  assert.equal(url.pathname, "/websquare/popup.do");
+  assert.equal(url.searchParams.get("tchdataHistryOid"), "I20251229153036419369883223060");
 });

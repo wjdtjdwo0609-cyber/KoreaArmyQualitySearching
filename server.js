@@ -35,6 +35,7 @@ const {
   validateSearchBudget,
   normalizeAttachmentName,
   classifyAttachmentCandidate,
+  extractKdsisDetailPopupUrl,
 } = require("./lib/runtime");
 
 const app = express();
@@ -397,6 +398,148 @@ async function waitForGridResult(page, timeoutMs = 15000) {
     GRID_ID_CANDIDATES,
     { timeout: timeoutMs }
   ).catch(() => {});
+}
+
+async function findGridDataDetailMatch(page, rowKey, { timeoutMs = 8000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await page.evaluate(({ key, gridIds }) => {
+      const norm = (v) => String(v || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+      const stringify = (v) => {
+        if (v === undefined || v === null) return "";
+        if (typeof v === "string") return v;
+        try { return JSON.stringify(v); } catch { return String(v); }
+      };
+      const methodNames = [
+        "getRowJSON", "getRowObject", "getRowData", "getRow", "getDataRow",
+      ];
+      const countMethods = [
+        "getRowCount", "getTotalRow", "getRealRowCount", "getDataLength",
+      ];
+      const cellMethods = ["getCellData", "getCellValue", "getValue"];
+      const rows = [];
+      const tried = [];
+
+      function addRow(gridId, source, index, data) {
+        if (data === undefined || data === null) return;
+        const text = stringify(data);
+        if (!text || text === "{}" || text === "[]") return;
+        rows.push({ gridId, source, index, data, text });
+      }
+
+      function getComponent(gridId) {
+        const candidates = [];
+        candidates.push(window[gridId]);
+        if (window.scwin) candidates.push(window.scwin[gridId]);
+        if (window.$p && typeof window.$p.getComponentById === "function") {
+          try { candidates.push(window.$p.getComponentById(gridId)); } catch {}
+        }
+        if (window.WebSquare && window.WebSquare.util && typeof window.WebSquare.util.getComponentById === "function") {
+          try { candidates.push(window.WebSquare.util.getComponentById(gridId)); } catch {}
+        }
+        return candidates.find((c) => c && typeof c === "object") || null;
+      }
+
+      function getCount(obj) {
+        for (const method of countMethods) {
+          try {
+            if (obj && typeof obj[method] === "function") {
+              const n = Number(obj[method]());
+              if (Number.isFinite(n) && n >= 0) return Math.min(n, 200);
+            }
+          } catch {}
+        }
+        return 0;
+      }
+
+      function collectFromObject(gridId, obj, source) {
+        if (!obj) return;
+        tried.push(`${gridId}:${source}`);
+
+        for (const method of ["getAllJSON", "getAllData", "getAllRows", "getList"]) {
+          try {
+            if (typeof obj[method] === "function") {
+              const all = obj[method]();
+              if (Array.isArray(all)) all.forEach((r, i) => addRow(gridId, `${source}.${method}`, i, r));
+              else if (all && typeof all === "object") addRow(gridId, `${source}.${method}`, 0, all);
+            }
+          } catch {}
+        }
+
+        const count = getCount(obj);
+        for (let i = 0; i < count; i++) {
+          for (const method of methodNames) {
+            try {
+              if (typeof obj[method] === "function") addRow(gridId, `${source}.${method}`, i, obj[method](i));
+            } catch {}
+          }
+
+          const cellRow = {};
+          let cellHit = false;
+          for (let c = 0; c < 40; c++) {
+            for (const method of cellMethods) {
+              try {
+                if (typeof obj[method] !== "function") continue;
+                const value = obj[method](i, c);
+                if (value !== undefined && value !== null && norm(value)) {
+                  cellRow[`cell_${c}`] = value;
+                  cellHit = true;
+                }
+              } catch {}
+            }
+          }
+          if (cellHit) addRow(gridId, `${source}.cells`, i, cellRow);
+        }
+      }
+
+      for (const gridId of gridIds) {
+        const grid = getComponent(gridId);
+        collectFromObject(gridId, grid, "grid");
+        try {
+          const dataList = grid && typeof grid.getDataList === "function" ? grid.getDataList() : null;
+          collectFromObject(gridId, dataList, "dataList");
+        } catch {}
+      }
+
+      const needle = norm(key);
+      const matched = needle
+        ? rows.find((row) => norm(row.text).includes(needle))
+        : rows[0];
+      const singleRowFallback = !matched && needle && rows.length === 1 ? rows[0] : null;
+      const usefulRows = rows.slice(0, 5).map((row) => ({
+        gridId: row.gridId,
+        source: row.source,
+        index: row.index,
+        text: norm(row.text).slice(0, 800),
+      }));
+      const picked = matched || singleRowFallback;
+      if (!picked) {
+        return { ok: false, reason: "grid-data-row-not-found", tried, rowCount: rows.length, rows: usefulRows };
+      }
+      return {
+        ok: true,
+        source: picked.source,
+        gridId: picked.gridId,
+        rowIndex: picked.index,
+        rowText: norm(picked.text).slice(0, 4000),
+        singleRowFallback: Boolean(singleRowFallback),
+        rows: usefulRows,
+      };
+    }, { key: rowKey, gridIds: GRID_ID_CANDIDATES }).catch((err) => ({
+      ok: false,
+      reason: "grid-data-evaluate-error",
+      error: err.message,
+    }));
+
+    if (last && last.ok) {
+      const detailUrl = extractKdsisDetailPopupUrl(last.rowText);
+      if (detailUrl) return { ...last, detailUrl };
+      last.reason = "grid-data-detail-url-not-found";
+    }
+    await page.waitForTimeout(500);
+  }
+  return last || { ok: false, reason: "grid-data-timeout" };
 }
 
 // ── KDSIS 검색 필드 매핑 ──────────────────────────────────
@@ -994,6 +1137,23 @@ async function openRowDetail({ params, rowKey }) {
     await waitForGridResult(page);
     await page.waitForTimeout(1000);
 
+    // WebSquare w2grid can report count=1 while no visible <tr> has been
+    // rendered yet. Prefer the component's internal row data when it exposes
+    // the detail popup OID/URL; this bypasses virtual-DOM timing entirely.
+    const gridDataMatch = await findGridDataDetailMatch(page, rowKey);
+    if (gridDataMatch && gridDataMatch.detailUrl) {
+      console.log(`[detail-grid-api] ${rowKey || "(first row)"} -> ${gridDataMatch.detailUrl}`);
+      try { await context.close(); } catch {}
+      const opened = await openKnownDetailUrl(gridDataMatch.detailUrl);
+      opened.rowMatch = {
+        via: "grid-data",
+        source: gridDataMatch.source,
+        gridId: gridDataMatch.gridId,
+        rowIndex: gridDataMatch.rowIndex,
+      };
+      return opened;
+    }
+
     // 지정된 규격번호가 첫 배치에 없으면 grid 를 스크롤해 추가 페이지를 로드.
     // 메인 검색(_runSearchOnce)은 MAX_SCROLLS=10 로 230행 전부 끌어오지만,
     // openRowDetail 은 스크롤이 없어서 예) 230건 중 STD-0008 이 아래쪽에
@@ -1128,7 +1288,7 @@ async function openRowDetail({ params, rowKey }) {
         };
       }, GRID_ID_CANDIDATES).catch(() => null);
       const err = new Error("ROW_NOT_FOUND");
-      err.diagnostics = { ...(snap || {}), matched };
+      err.diagnostics = { ...(snap || {}), matched, gridDataMatch };
       throw err;
     }
 
