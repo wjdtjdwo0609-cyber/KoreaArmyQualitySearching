@@ -125,6 +125,7 @@ const DOWNLOAD_STEP_TIMEOUT_MS = Number(process.env.KDSIS_DOWNLOAD_STEP_TIMEOUT_
 const DOWNLOAD_QUIET_MS = Number(process.env.KDSIS_DOWNLOAD_QUIET_MS || 900);
 const DOWNLOAD_BUNDLE_TIMEOUT_MS = Number(process.env.KDSIS_DOWNLOAD_BUNDLE_TIMEOUT_MS || 180_000);
 const DOWNLOAD_BUNDLE_MAX_DETAILS = Number(process.env.KDSIS_DOWNLOAD_BUNDLE_MAX_DETAILS || 10);
+const ATTACHMENT_RENDER_WAIT_MS = Number(process.env.KDSIS_ATTACHMENT_RENDER_WAIT_MS || 8_000);
 
 // Metadata cache: { attachments: [...] } keyed by params + row-key.
 const DETAIL_TTL_MS = Number(process.env.KDSIS_DETAIL_TTL_MS || 600_000);
@@ -1143,22 +1144,7 @@ async function openRowDetail({ params, rowKey }) {
     await waitForGridResult(page);
     await page.waitForTimeout(1000);
 
-    // WebSquare w2grid can report count=1 while no visible <tr> has been
-    // rendered yet. Prefer the component's internal row data when it exposes
-    // the detail popup OID/URL; this bypasses virtual-DOM timing entirely.
-    const gridDataMatch = await findGridDataDetailMatch(page, rowKey);
-    if (gridDataMatch && gridDataMatch.detailUrl) {
-      console.log(`[detail-grid-api] ${rowKey || "(first row)"} -> ${gridDataMatch.detailUrl}`);
-      try { await context.close(); } catch {}
-      const opened = await openKnownDetailUrl(gridDataMatch.detailUrl);
-      opened.rowMatch = {
-        via: "grid-data",
-        source: gridDataMatch.source,
-        gridId: gridDataMatch.gridId,
-        rowIndex: gridDataMatch.rowIndex,
-      };
-      return opened;
-    }
+    let gridDataMatch = null;
 
     // 지정된 규격번호가 첫 배치에 없으면 grid 를 스크롤해 추가 페이지를 로드.
     // 메인 검색(_runSearchOnce)은 MAX_SCROLLS=10 로 230행 전부 끌어오지만,
@@ -1272,6 +1258,24 @@ async function openRowDetail({ params, rowKey }) {
       }
     }
     if (!clicked) {
+      // WebSquare w2grid can report count=1 while no visible <tr> has been
+      // rendered yet. Use the component's internal popup URL only as a real
+      // fallback after the normal user-like row click path failed; direct URLs
+      // can render blank registration forms for some rows.
+      gridDataMatch = await findGridDataDetailMatch(page, rowKey);
+      if (gridDataMatch && gridDataMatch.detailUrl) {
+        console.log(`[detail-grid-api-fallback] ${rowKey || "(first row)"} -> ${gridDataMatch.detailUrl}`);
+        try { await context.close(); } catch {}
+        const opened = await openKnownDetailUrl(gridDataMatch.detailUrl);
+        opened.rowMatch = {
+          via: "grid-data-fallback",
+          source: gridDataMatch.source,
+          gridId: gridDataMatch.gridId,
+          rowIndex: gridDataMatch.rowIndex,
+        };
+        return opened;
+      }
+
       // ROW_NOT_FOUND 원인 파악용 진단 스냅샷 — grid가 비어있었는지 / 행은
       // 있는데 key가 안 맞았는지 구별해야 고칠 수 있다.
       const snap = await page.evaluate((gridIds) => {
@@ -1393,6 +1397,41 @@ async function openKnownDetailUrl(detailUrl) {
   }
 }
 
+async function waitForAttachmentRender(page, timeoutMs = ATTACHMENT_RENDER_WAIT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  let last = { frameCount: 0, sectionFrames: 0, fileFrames: 0, emptyFrames: 0 };
+  while (Date.now() < deadline) {
+    const summaries = await Promise.all(
+      page.frames().map((frame) =>
+        frame.evaluate(() => {
+          const text = document.body?.textContent || "";
+          const html = document.documentElement?.outerHTML || "";
+          const haystack = `${text}\n${html}`;
+          return {
+            url: location.href.slice(0, 200),
+            bodyLen: text.length,
+            hasSection: /규격서첨부|첨부파일|파일\s*이름|파일\s*크기|attach|DEXT/i.test(haystack),
+            hasFile: /\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|ppt|pptx|zip|txt|jpg|jpeg|png|gif)\b/i.test(text),
+            hasEmpty: /데이터가\s*없음|첨부파일이\s*없|0\s*개|0\s*건/i.test(text),
+          };
+        }).catch(() => null)
+      )
+    );
+    const frames = summaries.filter(Boolean);
+    last = {
+      frameCount: frames.length,
+      sectionFrames: frames.filter((f) => f.hasSection).length,
+      fileFrames: frames.filter((f) => f.hasFile).length,
+      emptyFrames: frames.filter((f) => f.hasEmpty).length,
+      frames: frames.slice(0, 5),
+    };
+    if (last.fileFrames > 0) return { ok: true, reason: "file-rendered", ...last };
+    if (last.sectionFrames > 0 && last.emptyFrames > 0) return { ok: true, reason: "empty-rendered", ...last };
+    await page.waitForTimeout(350).catch(() => {});
+  }
+  return { ok: false, reason: "attachment-render-timeout", ...last };
+}
+
 // 상세 페이지(+ 서브프레임)에서 첨부 후보를 긁어온다. 반환 형태:
 //   { name, kind: "direct"|"js", id, href?, onclick?, frameUrl }
 // 직링크(A/B)와 JS 트리거(C)를 모두 수용. UI는 kind 무관하게 같은 URL을 쓰고,
@@ -1402,8 +1441,10 @@ async function openKnownDetailUrl(detailUrl) {
 // 이슈가 있었다. 이제는 클릭 가능한 모든 요소 + 파일 확장자가 포함된 요소를
 // 넓게 스캔하고 탐지 근거(matched)를 함께 저장해 디버깅 가능하게 한다.
 async function extractAttachments(page, opts = {}) {
+  const renderState = await waitForAttachmentRender(page, opts.renderTimeoutMs || ATTACHMENT_RENDER_WAIT_MS);
   const seen = new Map();
   const out = [];
+  const diagnostics = { renderState, frameSummaries: [] };
   const FILE_EXT_RE = /\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|ppt|pptx|zip|txt|xml|jpg|jpeg|png|gif)$/i;
   const FILE_EXT_INLINE_RE = /\.(pdf|hwp|hwpx|doc|docx|xls|xlsx|ppt|pptx|zip|txt|xml|jpg|jpeg|png|gif)\b/i;
   const DOWNLOAD_KW_RE = /download|filedown|fn_download|fndownload|filednwld|openfile|goFile|다운로드|첨부/i;
@@ -1418,9 +1459,10 @@ async function extractAttachments(page, opts = {}) {
           const DOWNLOAD_KW = new RegExp(DOWNLOAD_KW_SRC, "i");
           const CTX_RE = new RegExp(CTX_SRC, "i");
 
-          // Step 1 — "첨부파일" 섹션 root 후보를 찾아서 그 scope 안을 우선적으로
-          // 훑는다. root를 못 찾으면 body 전체를 scope로 사용.
-          let scope = null;
+          // Step 1 — "첨부파일" 섹션 root 후보를 찾아서 우선 훑되, 잘못된
+          // 작은 scope를 잡는 경우를 대비해 document 전체도 반드시 fallback
+          // root로 같이 스캔한다.
+          const scopes = [];
           const allEls = document.querySelectorAll("*");
           for (const el of allEls) {
             const direct = Array.from(el.childNodes)
@@ -1432,20 +1474,24 @@ async function extractAttachments(page, opts = {}) {
               // 이 요소가 "첨부파일" 라벨이면 그 부모(2~3단 위)를 scope로
               let s = el.parentElement || el;
               for (let i = 0; i < 3 && s.parentElement; i++) s = s.parentElement;
-              scope = s;
-              break;
+              if (!scopes.includes(s)) scopes.push(s);
+              if (scopes.length >= 6) break;
             }
           }
-          const root = scope || document;
 
           const hits = [];
+          const visited = new Set();
           const tags = "a, button, span, li, tr, div, input";
-          root.querySelectorAll(tags).forEach((el, idx) => {
+          const scanRoot = (root, rootLabel) => {
+            root.querySelectorAll(tags).forEach((el, idx) => {
+            if (visited.has(el)) return;
+            visited.add(el);
             const tag = el.tagName.toLowerCase();
             const href = el.getAttribute("href") || "";
             const onclick = el.getAttribute("onclick") || "";
             const val = el.getAttribute("value") || "";
             const text = (el.textContent || "").trim();
+            const label = text || val;
             const dataAttrs = Array.from(el.attributes || [])
               .filter((a) => a.name.startsWith("data-"))
               .map((a) => `${a.name}=${a.value}`)
@@ -1461,10 +1507,10 @@ async function extractAttachments(page, opts = {}) {
             // scope 안에서 클릭 가능한 버튼/링크는 일단 후보로 (너무 넓으면
             // dedup/텍스트 체크로 걸러짐)
             if (
-              scope &&
+              rootLabel !== "document" &&
               (tag === "a" || tag === "button" || (tag === "input" && /button|submit/i.test(el.type || ""))) &&
-              text.length > 0 &&
-              text.length < 120
+              label.length > 0 &&
+              label.length < 120
             ) {
               reasons.push("scope-clickable");
             }
@@ -1482,9 +1528,17 @@ async function extractAttachments(page, opts = {}) {
               val: val.slice(0, 200),
               matched: reasons,
               idx,
+              root: rootLabel,
             });
-          });
-          return { hits, scopeFound: !!scope };
+            });
+          };
+          scopes.forEach((scope, idx) => scanRoot(scope, `scope-${idx + 1}`));
+          scanRoot(document, "document");
+          return {
+            hits,
+            scopeCount: scopes.length,
+            bodyLen: (document.body?.textContent || "").length,
+          };
         },
         {
           FILE_EXT_SRC: FILE_EXT_RE.source,
@@ -1493,7 +1547,21 @@ async function extractAttachments(page, opts = {}) {
           CTX_SRC: ATTACH_CONTEXT_RE.source,
         }
       )
-      .catch(() => ({ hits: [] }));
+      .catch((err) => ({ hits: [], error: err.message }));
+
+    diagnostics.frameSummaries.push({
+      frameUrl: frame.url().slice(0, 200),
+      scopeCount: batch.scopeCount || 0,
+      rawHitCount: Array.isArray(batch.hits) ? batch.hits.length : 0,
+      bodyLen: batch.bodyLen || 0,
+      error: batch.error || null,
+      sampleHits: (batch.hits || []).slice(0, 8).map((h) => ({
+        name: h.name,
+        tag: h.tag,
+        matched: h.matched,
+        root: h.root,
+      })),
+    });
 
     for (const b of batch.hits) {
       const classified = classifyAttachmentCandidate(b);
@@ -1543,8 +1611,12 @@ async function extractAttachments(page, opts = {}) {
   // opts.includeHtml 가 true 면 추출 결과와 함께 페이지 HTML(앞 60KB) 도 동봉.
   // 파일시스템 우회용 — 사용자가 응답 JSON 만으로 KDSIS 상세 페이지 실물을
   // 확인할 수 있다.
-  if (opts.includeHtml && savedHtml) {
-    return { attachments: out, html: savedHtml.slice(0, 60_000) };
+  if ((opts.includeHtml && savedHtml) || opts.includeDiagnostics) {
+    return {
+      attachments: out,
+      html: opts.includeHtml && savedHtml ? savedHtml.slice(0, 60_000) : undefined,
+      diagnostics,
+    };
   }
   return out;
 }
@@ -3276,9 +3348,16 @@ app.get("/api/detail", async (req, res) => {
     const result = await downloadPool.run(async () => {
       const { context, page, detailUrl } = await openRowDetailWithRetry({ params, rowKey });
       try {
-        const ext = await extractAttachments(page, { includeHtml });
-        if (includeHtml && ext && Array.isArray(ext.attachments)) {
-          return { attachments: ext.attachments, html: ext.html, rowKey, detailUrl };
+        const ext = await extractAttachments(page, { includeHtml, includeDiagnostics: true });
+        if (ext && Array.isArray(ext.attachments)) {
+          const response = {
+            attachments: ext.attachments,
+            rowKey,
+            detailUrl,
+          };
+          if (includeHtml && ext.html) response.html = ext.html;
+          if (ext.attachments.length === 0 && ext.diagnostics) response.diagnostics = ext.diagnostics;
+          return response;
         }
         return { attachments: ext, rowKey, detailUrl };
       } finally {

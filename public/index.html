@@ -197,7 +197,7 @@
     .attach-load-btn{background:transparent;border:1px solid var(--border);border-radius:var(--r-sm);color:var(--primary);font-size:.8125rem;font-weight:500;padding:.375rem .625rem;cursor:pointer;transition:background .15s}
     .attach-load-btn:hover:not(:disabled){background:var(--primary-row)}
     .attach-load-btn:disabled{opacity:.6;cursor:progress}
-    .attach-load-btn.attach-none{color:var(--muted);cursor:default;opacity:.75}
+    .attach-load-btn.attach-none{color:var(--muted);cursor:pointer;opacity:.85}
     .attach-load-btn.attach-none:disabled{cursor:default}
     .attach-panel{margin-top:.5rem;font-size:.8125rem}
     .attach-loading,.attach-empty{color:var(--muted);padding:.375rem .25rem}
@@ -1999,7 +1999,8 @@ async function handleClickDelegated(e) {
     // chips (rendered=1). Hover/auto prefetch sets loaded=1 to warm the
     // badge but never renders chips, so a click on a prefetched row must
     // still go through the fetch path to populate the panel.
-    if (block.dataset.rendered === "1") {
+    const forceRefresh = block.dataset.count === "0" || attachBtn.classList.contains("attach-none");
+    if (block.dataset.rendered === "1" && !forceRefresh) {
       const open = !panel.hidden;
       panel.hidden = open;
       attachBtn.setAttribute("aria-expanded", String(!open));
@@ -2015,7 +2016,9 @@ async function handleClickDelegated(e) {
     panel.innerHTML = '<div class="attach-loading">KDSIS 상세 페이지를 여는 중…</div>';
     attachBtn.setAttribute("aria-expanded", "true");
     try {
-      const qs = new URLSearchParams({ params: paramsJson, key: spec }).toString();
+      const qsParams = { params: paramsJson, key: spec };
+      if (forceRefresh) qsParams.refresh = "1";
+      const qs = new URLSearchParams(qsParams).toString();
       const res = await fetch(`/api/detail?${qs}`);
       if (res.status === 429) {
         const retry = res.headers.get("Retry-After") || "잠시";
@@ -2048,7 +2051,13 @@ async function handleClickDelegated(e) {
         const data = await res.json();
         const list = Array.isArray(data.attachments) ? data.attachments : [];
         if (list.length === 0) {
-          panel.innerHTML = '<div class="attach-empty">첨부파일이 없습니다.</div>';
+          let html = '<div class="attach-empty">첨부파일이 감지되지 않았습니다. 다시 확인할 수 있습니다.';
+          if (data && data.diagnostics) {
+            const diag = JSON.stringify(data.diagnostics, null, 2);
+            html += `<details class="attach-diag"><summary>진단 정보</summary><pre>${esc(diag)}</pre></details>`;
+          }
+          html += '</div>';
+          panel.innerHTML = html;
         } else {
           const chips = list.map((a) => {
             const id = String(a.id || "");
@@ -2095,14 +2104,14 @@ async function handleClickDelegated(e) {
 }
 
 // Updates a .attach-block's button to reflect the known attachment count.
-// count === 0 → "📎 첨부 없음" (disabled, muted); count > 0 → "📎 첨부 N개".
+// count === 0 is still clickable so a false negative can be force-refreshed.
 function setAttachBtnLabelFromCount(block, count) {
   const btn = block.querySelector(".attach-load-btn");
   if (!btn) return;
   if (count === 0) {
-    btn.textContent = "📎 첨부 없음";
+    btn.textContent = "📎 첨부 다시 확인";
     btn.classList.add("attach-none");
-    btn.disabled = true;
+    btn.disabled = false;
     btn.setAttribute("aria-expanded", "false");
   } else {
     btn.textContent = `📎 첨부 ${count}개`;
