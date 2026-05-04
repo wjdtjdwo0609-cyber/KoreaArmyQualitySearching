@@ -639,6 +639,15 @@ function downloadJson(data, filename) {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
   downloadBlob(blob, filename);
 }
+function filenameFromDisposition(disposition, fallback) {
+  const raw = String(disposition || "");
+  const star = raw.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) {
+    try { return decodeURIComponent(star[1]); } catch (_) { return star[1]; }
+  }
+  const plain = raw.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1] : fallback;
+}
 
 // ── Clipboard ──
 async function copyText(text) {
@@ -1598,6 +1607,7 @@ function addResultMessage(data) {
   html += `<button type="button" class="sort-dir" data-sort-dir="${uid}" aria-label="오름차순/내림차순 전환" title="오름차순">▲</button>`;
   html += `</label>`;
   html += `<button class="view-toggle" type="button" data-toggle-view="${uid}" aria-pressed="false">📊 표로 보기</button>`;
+  html += `<button class="view-toggle" type="button" data-download-kdsis="${uid}" title="KDSIS 원본 엑셀과 상세 첨부를 ZIP으로 다운로드">⬇ 원본 ZIP</button>`;
   html += `<button class="view-toggle" type="button" data-download-csv="${uid}" title="CSV로 다운로드">⬇ CSV</button>`;
   html += `<button class="view-toggle" type="button" data-download-json="${uid}" title="JSON으로 다운로드">⬇ JSON</button>`;
   html += "</div>";
@@ -1833,6 +1843,63 @@ async function handleClickDelegated(e) {
         scanBtn.textContent = "📎 모두 스캔 완료";
       }
     });
+    return;
+  }
+  const kdsisZipBtn = e.target.closest("[data-download-kdsis]");
+  if (kdsisZipBtn) {
+    const uid = kdsisZipBtn.dataset.downloadKdsis;
+    const entry = resultDataByUid.get(uid);
+    if (!entry) {
+      toast("다운로드할 결과가 없습니다", "error");
+      return;
+    }
+    if (!entry.data.searchParams || Object.keys(entry.data.searchParams).length === 0) {
+      toast("원본 다운로드에 필요한 검색 조건이 없습니다", "error");
+      return;
+    }
+
+    const keys = [...new Set(
+      entry.data.rows
+        .map((row) => row["규격번호"])
+        .filter((value) => value && String(value).trim())
+        .map((value) => String(value).trim())
+    )];
+    const oldText = kdsisZipBtn.textContent;
+    kdsisZipBtn.disabled = true;
+    kdsisZipBtn.textContent = "수집 중…";
+    toast("KDSIS에서 엑셀과 첨부파일을 모으는 중입니다", "info", 3500);
+    try {
+      const res = await fetch("/api/download/bundle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          params: entry.data.searchParams,
+          keys,
+        }),
+      });
+      if (!res.ok) {
+        let message = `원본 ZIP 실패 (HTTP ${res.status})`;
+        try {
+          const err = await res.json();
+          if (err && err.error) message = err.error;
+        } catch (_) {}
+        throw new Error(message);
+      }
+      const blob = await res.blob();
+      const filename = filenameFromDisposition(
+        res.headers.get("Content-Disposition"),
+        `kdsis_original_${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15)}.zip`
+      );
+      downloadBlob(blob, filename);
+      const count = res.headers.get("X-KDSIS-Original-File-Count") || res.headers.get("X-KDSIS-Download-Count");
+      const warnings = res.headers.get("X-KDSIS-Download-Warnings");
+      toast(`원본 ZIP 저장${count ? `: ${count}개 파일` : ""}${warnings ? " (요약 포함)" : ""}`, "success", 3500);
+    } catch (err) {
+      toast(`원본 ZIP 실패: ${err.message}`, "error", 4500);
+    } finally {
+      kdsisZipBtn.disabled = false;
+      kdsisZipBtn.textContent = oldText;
+    }
     return;
   }
   const dlBtn = e.target.closest("[data-download-csv], [data-download-json]");

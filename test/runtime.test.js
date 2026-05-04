@@ -22,6 +22,8 @@ const {
   classifyAttachmentCandidate,
   buildKdsisDetailPopupUrl,
   extractKdsisDetailPopupUrl,
+  sanitizeFilename,
+  createZip,
 } = require("../lib/runtime");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -495,6 +497,28 @@ test("projectScrollCoverage: MAX_SCROLLS=25 covers 230 rows", () => {
 test("projectScrollCoverage: unknown totalCount returns sufficient=true", () => {
   const r = projectScrollCoverage({ totalCount: 0, maxScrolls: 5 });
   assert.equal(r.sufficient, true);
+});
+
+// ── ZIP helpers ────────────────────────────────────────────
+
+test("sanitizeFilename: removes path separators and illegal filename characters", () => {
+  assert.equal(sanitizeFilename("../bad:name?.pdf"), "_bad_name_.pdf");
+  assert.equal(sanitizeFilename("   "), "download");
+});
+
+test("createZip: writes a valid ZIP envelope with UTF-8 filenames", () => {
+  const zip = createZip(
+    [
+      { name: "검색결과.xlsx", data: Buffer.from("excel") },
+      { name: "첨부.pdf", data: Buffer.from("pdf") },
+    ],
+    new Date("2026-05-04T00:00:00Z")
+  );
+  assert.equal(zip.readUInt32LE(0), 0x04034b50);
+  assert.equal(zip.readUInt32LE(zip.length - 22), 0x06054b50);
+  assert.equal(zip.readUInt16LE(zip.length - 22 + 10), 2);
+  assert.ok(zip.includes(Buffer.from("검색결과.xlsx", "utf8")));
+  assert.ok(zip.includes(Buffer.from("첨부.pdf", "utf8")));
 });
 
 // ── DEXT attachment candidate classification ───────────────────────────────

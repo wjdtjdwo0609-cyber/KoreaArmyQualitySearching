@@ -36,6 +36,8 @@ const {
   normalizeAttachmentName,
   classifyAttachmentCandidate,
   extractKdsisDetailPopupUrl,
+  sanitizeFilename,
+  createZip,
 } = require("./lib/runtime");
 
 const app = express();
@@ -119,6 +121,10 @@ const _inFlight = new Map();   // key → Promise<results>
 // 발생하는 작업.)
 const DOWNLOAD_CONCURRENCY = Number(process.env.KDSIS_DOWNLOAD_CONCURRENCY || 2);
 const downloadPool = createConcurrentQueue(DOWNLOAD_CONCURRENCY);
+const DOWNLOAD_STEP_TIMEOUT_MS = Number(process.env.KDSIS_DOWNLOAD_STEP_TIMEOUT_MS || 12_000);
+const DOWNLOAD_QUIET_MS = Number(process.env.KDSIS_DOWNLOAD_QUIET_MS || 900);
+const DOWNLOAD_BUNDLE_TIMEOUT_MS = Number(process.env.KDSIS_DOWNLOAD_BUNDLE_TIMEOUT_MS || 180_000);
+const DOWNLOAD_BUNDLE_MAX_DETAILS = Number(process.env.KDSIS_DOWNLOAD_BUNDLE_MAX_DETAILS || 10);
 
 // Metadata cache: { attachments: [...] } keyed by params + row-key.
 const DETAIL_TTL_MS = Number(process.env.KDSIS_DETAIL_TTL_MS || 600_000);
@@ -1767,6 +1773,343 @@ async function triggerDownload(page, attachment) {
   throw new Error("DOWNLOAD_FAILED");
 }
 
+function uniqueFilename(name, usedNames) {
+  const safe = sanitizeFilename(name, "download.bin");
+  if (!usedNames.has(safe)) {
+    usedNames.add(safe);
+    return safe;
+  }
+  const dot = safe.lastIndexOf(".");
+  const base = dot > 0 ? safe.slice(0, dot) : safe;
+  const ext = dot > 0 ? safe.slice(dot) : "";
+  for (let i = 2; i < 10_000; i++) {
+    const candidate = `${base}-${i}${ext}`;
+    if (!usedNames.has(candidate)) {
+      usedNames.add(candidate);
+      return candidate;
+    }
+  }
+  const fallback = `${base}-${Date.now()}${ext}`;
+  usedNames.add(fallback);
+  return fallback;
+}
+
+function zipDisposition(filename) {
+  return `attachment; filename*=UTF-8''${encodeURIComponent(sanitizeFilename(filename, "kdsis_original.zip"))}`;
+}
+
+async function readPlaywrightDownload(download) {
+  const stream = await download.createReadStream();
+  if (!stream) throw new Error("download stream unavailable");
+  const chunks = [];
+  await new Promise((resolve, reject) => {
+    stream.on("data", (chunk) => chunks.push(chunk));
+    stream.on("end", resolve);
+    stream.on("error", reject);
+  });
+  return Buffer.concat(chunks);
+}
+
+async function captureDownloads(context, action, { timeoutMs = DOWNLOAD_STEP_TIMEOUT_MS, quietMs = DOWNLOAD_QUIET_MS } = {}) {
+  const downloads = [];
+  const cleanups = [];
+  const pages = new Set();
+
+  const attach = (page) => {
+    if (!page || pages.has(page)) return;
+    pages.add(page);
+    const onDownload = (download) => downloads.push(download);
+    page.on("download", onDownload);
+    cleanups.push(() => page.off("download", onDownload));
+  };
+
+  context.pages().forEach(attach);
+  const onPage = (page) => attach(page);
+  context.on("page", onPage);
+  cleanups.push(() => context.off("page", onPage));
+
+  let actionError = null;
+  try {
+    await action();
+  } catch (err) {
+    actionError = err;
+  }
+
+  const started = Date.now();
+  let lastCount = downloads.length;
+  let lastChangeAt = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (downloads.length !== lastCount) {
+      lastCount = downloads.length;
+      lastChangeAt = Date.now();
+    }
+    if (downloads.length > 0 && Date.now() - lastChangeAt >= quietMs) break;
+    if (actionError && downloads.length === 0 && Date.now() - started > 1000) break;
+  }
+
+  cleanups.forEach((fn) => {
+    try { fn(); } catch {}
+  });
+
+  if (actionError && downloads.length === 0) throw actionError;
+  return downloads;
+}
+
+async function downloadsToZipFiles(downloads, prefix, usedNames, errors) {
+  const files = [];
+  for (const download of downloads) {
+    try {
+      const failure = await download.failure();
+      if (failure) {
+        errors.push(`${prefix}: 다운로드 실패 - ${failure}`);
+        continue;
+      }
+      const data = await readPlaywrightDownload(download);
+      if (!data.length) continue;
+      const suggested = sanitizeFilename(download.suggestedFilename(), `${prefix}.bin`);
+      const name = uniqueFilename(`${sanitizeFilename(prefix)}_${suggested}`, usedNames);
+      files.push({ name, data });
+    } catch (err) {
+      errors.push(`${prefix}: 다운로드 파일 읽기 실패 - ${err.message}`);
+    }
+  }
+  return files;
+}
+
+async function clickByTextInAnyFrame(page, needles, { all = false, max = 20 } = {}) {
+  const clicked = [];
+  for (const frame of page.frames()) {
+    const frameClicked = await frame.evaluate(
+      ({ needles: rawNeedles, all: clickAll, max: clickMax }) => {
+        const norm = (value) => String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+        const compact = (value) => norm(value).replace(/\s+/g, "").toLowerCase();
+        const needles = rawNeedles.map((n) => ({
+          text: norm(n).toLowerCase(),
+          compact: compact(n),
+        })).filter((n) => n.text || n.compact);
+        const isVisible = (el) => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        };
+        const labelOf = (el) => norm(el.textContent || el.value || el.title || el.getAttribute("aria-label") || "");
+        const els = Array.from(document.querySelectorAll(
+          "button, input, a, [role='button'], span[onclick], div[onclick]"
+        ));
+        const hits = [];
+        for (const el of els) {
+          if (!isVisible(el)) continue;
+          const label = labelOf(el);
+          if (!label || label.length > 120) continue;
+          const lower = label.toLowerCase();
+          const packed = compact(label);
+          const matched = needles.some((n) => lower.includes(n.text) || (n.compact && packed.includes(n.compact)));
+          if (!matched) continue;
+          hits.push({ el, label });
+        }
+
+        const labels = [];
+        for (const hit of hits) {
+          try {
+            hit.el.scrollIntoView({ block: "center", inline: "center" });
+            hit.el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+            hit.el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+            hit.el.click();
+            labels.push(hit.label);
+          } catch {}
+          if (!clickAll || labels.length >= clickMax) break;
+        }
+        return labels;
+      },
+      { needles, all, max }
+    ).catch(() => []);
+    clicked.push(...frameClicked.map((label) => `${label}`));
+    if (!all && clicked.length > 0) break;
+    if (clicked.length >= max) break;
+  }
+  return clicked;
+}
+
+async function runKdsisSearchForDownloads(page, params) {
+  await navigateToKdsis(page);
+  await fillSearchForm(page, params || {});
+  await clickSearchButton(page);
+  await waitForGridResult(page);
+  await page.waitForTimeout(1500);
+}
+
+async function extractSpecNosFromSearchPage(page) {
+  return page.evaluate((gridIds) => {
+    const norm = (value) => String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+    for (const gridId of gridIds) {
+      const header = document.getElementById(`${gridId}_header_thead`) || document.querySelector(`#${gridId} thead`);
+      const tbody = document.getElementById(`${gridId}_body_tbody`);
+      if (!header || !tbody) continue;
+      const headers = [];
+      header.querySelectorAll("th[col_id]").forEach((th) => {
+        const name = norm(th.textContent || th.getAttribute("col_id"));
+        const colspan = parseInt(th.getAttribute("colspan") || "1", 10);
+        for (let i = 0; i < Math.max(1, colspan); i++) headers.push(name);
+      });
+      const specIdx = headers.findIndex((name) => name === "규격번호");
+      if (specIdx < 0) continue;
+      const out = [];
+      tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']").forEach((tr) => {
+        const cells = Array.from(tr.querySelectorAll("td")).filter((td) => !(td.id || "").startsWith("_headerRowNumber_"));
+        const cell = cells[specIdx];
+        const value = norm(cell?.textContent || "");
+        if (value) out.push(value);
+      });
+      if (out.length) return [...new Set(out)];
+    }
+    return [];
+  }, GRID_ID_CANDIDATES).catch(() => []);
+}
+
+async function appendCapturedFiles({ context, action, prefix, usedNames, errors, files }) {
+  try {
+    const downloads = await captureDownloads(context, action);
+    if (!downloads.length) {
+      errors.push(`${prefix}: 다운로드 이벤트가 발생하지 않았습니다.`);
+      return 0;
+    }
+    const collected = await downloadsToZipFiles(downloads, prefix, usedNames, errors);
+    files.push(...collected);
+    return collected.length;
+  } catch (err) {
+    errors.push(`${prefix}: ${err.message}`);
+    return 0;
+  }
+}
+
+async function downloadKdsisBundle(params, detailKeys = []) {
+  const files = [];
+  const errors = [];
+  const usedNames = new Set();
+  let searchContext;
+
+  const browser = await getBrowser();
+  try {
+    searchContext = await browser.newContext({
+      locale: "ko-KR",
+      ignoreHTTPSErrors: true,
+      acceptDownloads: true,
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      extraHTTPHeaders: { Referer: "https://kdsis.dapa.go.kr/" },
+    });
+    await searchContext.route("**/*", (route) => {
+      const t = route.request().resourceType();
+      if (t === "image" || t === "font" || t === "media") return route.abort();
+      return route.continue();
+    });
+    const page = await searchContext.newPage();
+    console.log("[KDSIS] 원본 묶음: 검색 페이지 준비", params);
+    await runKdsisSearchForDownloads(page, params);
+
+    await appendCapturedFiles({
+      context: searchContext,
+      prefix: "검색결과_엑셀",
+      usedNames,
+      errors,
+      files,
+      action: async () => {
+        const clicked = await clickByTextInAnyFrame(page, ["엑셀다운로드", "엑셀 다운로드", "excel"]);
+        if (!clicked.length) throw new Error("검색 결과 엑셀다운로드 버튼을 찾지 못했습니다.");
+      },
+    });
+
+    if (!detailKeys.length) detailKeys = await extractSpecNosFromSearchPage(page);
+  } finally {
+    if (searchContext) {
+      try { await searchContext.close(); } catch {}
+    }
+  }
+
+  const normalizedKeys = [...new Set((detailKeys || []).map((k) => normalizeAttachmentName(k)).filter(Boolean))];
+  const keys = normalizedKeys.slice(0, DOWNLOAD_BUNDLE_MAX_DETAILS);
+  if (normalizedKeys.length > keys.length) {
+    errors.push(`상세 팝업은 ${DOWNLOAD_BUNDLE_MAX_DETAILS}건까지만 처리했습니다. (${normalizedKeys.length}건 중 ${keys.length}건)`);
+  }
+
+  for (let i = 0; i < keys.length; i++) {
+    const rowKey = keys[i];
+    const label = `${String(i + 1).padStart(2, "0")}_${rowKey}`;
+    let opened = null;
+    try {
+      opened = await openRowDetailWithRetry({ params, rowKey });
+      const { context, page } = opened;
+
+      await appendCapturedFiles({
+        context,
+        prefix: `${label}_규격서첨부`,
+        usedNames,
+        errors,
+        files,
+        action: async () => {
+          const clicked = await clickByTextInAnyFrame(page, ["전체 다운로드", "전체다운로드"]);
+          if (!clicked.length) throw new Error("규격서첨부 전체 다운로드 버튼을 찾지 못했습니다.");
+        },
+      });
+
+      await appendCapturedFiles({
+        context,
+        prefix: `${label}_상세엑셀`,
+        usedNames,
+        errors,
+        files,
+        action: async () => {
+          const clicked = await clickByTextInAnyFrame(page, ["엑셀다운로드", "엑셀 다운로드", "excel"], {
+            all: true,
+            max: 12,
+          });
+          if (!clicked.length) throw new Error("상세 화면 엑셀다운로드 버튼을 찾지 못했습니다.");
+        },
+      });
+    } catch (err) {
+      errors.push(`${label}: 상세 팝업 처리 실패 - ${err.message}`);
+    } finally {
+      if (opened?.context) {
+        try { await opened.context.close(); } catch {}
+      }
+    }
+  }
+
+  const downloadedFileCount = files.length;
+  if (downloadedFileCount === 0) {
+    throw new Error(errors[0] || "KDSIS에서 내려받은 파일이 없습니다.");
+  }
+
+  if (errors.length > 0) {
+    files.push({
+      name: uniqueFilename("download-summary.txt", usedNames),
+      data: Buffer.from(
+        [
+          "KDSIS 원본 묶음 다운로드 요약",
+          `생성시각: ${new Date().toISOString()}`,
+          `검색조건: ${JSON.stringify(params || {})}`,
+          `상세 팝업 처리: ${keys.length}건`,
+          "",
+          "주의/오류:",
+          ...errors.map((e) => `- ${e}`),
+          "",
+        ].join("\n"),
+        "utf8"
+      ),
+    });
+  }
+
+  const zipName = `kdsis_original_${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15)}.zip`;
+  return {
+    zipName,
+    zip: createZip(files),
+    fileCount: files.length,
+    downloadedFileCount,
+    errors,
+  };
+}
+
 // ── 진단 모드: 페이지 내부 상태 전부 덤프 ─────────────────
 // 목적: "왜 결과가 0건인가"를 원인별로 분리해서 판정
 //   1) 폼 입력이 실제로 반영됐는가 (dropdown 선택 포함)
@@ -2873,6 +3216,39 @@ app.get("/api/detail/cached", (req, res) => {
     ? entry.attachments.filter((a) => a.action !== "download-all").length
     : 0;
   res.json({ cached: true, count });
+});
+
+app.post("/api/download/bundle", async (req, res) => {
+  if (!(await _enforceRateLimit(req, res))) return;
+
+  const { params, keys } = req.body || {};
+  if (!params || typeof params !== "object") {
+    return res.status(400).json({ error: "params 객체가 필요합니다." });
+  }
+
+  const detailKeys = Array.isArray(keys) ? keys.map((k) => String(k || "")).filter(Boolean) : [];
+  console.log("[원본 묶음 다운로드]", params, detailKeys);
+  try {
+    const bundle = await downloadPool.run(() =>
+      withTimeout(downloadKdsisBundle(params, detailKeys), DOWNLOAD_BUNDLE_TIMEOUT_MS, "[KDSIS] download bundle")
+    );
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", zipDisposition(bundle.zipName));
+    res.setHeader("X-KDSIS-Download-Count", String(bundle.fileCount));
+    res.setHeader("X-KDSIS-Original-File-Count", String(bundle.downloadedFileCount));
+    if (bundle.errors.length > 0) {
+      res.setHeader("X-KDSIS-Download-Warnings", encodeURIComponent(String(bundle.errors.length)));
+    }
+    res.end(bundle.zip);
+  } catch (err) {
+    const msg = err.message || String(err);
+    if (msg === "KDSIS_BLOCKED") {
+      res.setHeader("Retry-After", "60");
+      return res.status(503).json({ error: "KDSIS가 요청을 차단했습니다." });
+    }
+    console.error("[/api/download/bundle]", msg);
+    res.status(500).json({ error: msg });
+  }
 });
 
 app.get("/api/detail", async (req, res) => {
