@@ -206,8 +206,9 @@
     .attach-diag summary{cursor:pointer;color:var(--error);user-select:none}
     .attach-diag pre{font-family:var(--mono);font-size:.7rem;white-space:pre-wrap;word-break:break-word;margin:.25rem 0 0;padding:.375rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text);max-height:180px;overflow:auto}
     .attach-chips{display:flex;flex-wrap:wrap;gap:.375rem}
-    .attach-chip{display:inline-flex;align-items:center;gap:.25rem;max-width:100%;padding:.375rem .625rem;background:var(--primary-row);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text);text-decoration:none;font-size:.8125rem;word-break:break-all}
-    .attach-chip:hover{background:var(--primary-tint);border-color:var(--primary)}
+    .attach-chip{display:inline-flex;align-items:center;gap:.25rem;max-width:100%;padding:.375rem .625rem;background:var(--primary-row);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text);text-decoration:none;font:inherit;font-size:.8125rem;text-align:left;word-break:break-all;cursor:pointer}
+    .attach-chip:hover:not(:disabled){background:var(--primary-tint);border-color:var(--primary)}
+    .attach-chip:disabled{opacity:.65;cursor:progress}
     .attach-size{color:var(--muted);font-size:.75rem;margin-left:.25rem}
 
     /* Compact table (fallback/toggle view) */
@@ -1845,6 +1846,42 @@ async function handleClickDelegated(e) {
     });
     return;
   }
+  const attachChip = e.target.closest("[data-attach-url]");
+  if (attachChip) {
+    const url = attachChip.dataset.attachUrl;
+    if (!url || attachChip.disabled) return;
+    const oldHtml = attachChip.innerHTML;
+    attachChip.disabled = true;
+    attachChip.innerHTML = "다운로드 중…";
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        const raw = await res.text();
+        let parsed = null;
+        try { parsed = JSON.parse(raw); } catch {}
+        const message = parsed?.error || raw.slice(0, 200) || `HTTP ${res.status}`;
+        throw new Error(message);
+      }
+      const blob = await res.blob();
+      const fallback = attachChip.dataset.attachName || "attachment";
+      const filename = filenameFromDisposition(res.headers.get("Content-Disposition"), fallback);
+      downloadBlob(blob, filename);
+      toast(`다운로드 시작: ${filename}`, "success", 2600);
+    } catch (err) {
+      toast(`첨부 다운로드 실패: ${err.message}`, "error", 4500);
+      const panel = attachChip.closest(".attach-panel");
+      if (panel && !panel.querySelector(".attach-download-error")) {
+        const div = document.createElement("div");
+        div.className = "attach-err attach-download-error";
+        div.textContent = `다운로드 실패: ${err.message}`;
+        panel.appendChild(div);
+      }
+    } finally {
+      attachChip.disabled = false;
+      attachChip.innerHTML = oldHtml;
+    }
+    return;
+  }
   const kdsisZipBtn = e.target.closest("[data-download-kdsis]");
   if (kdsisZipBtn) {
     const uid = kdsisZipBtn.dataset.downloadKdsis;
@@ -2066,22 +2103,9 @@ async function handleClickDelegated(e) {
             const size = a.size ? ` <span class="attach-size">(${esc(a.size)})</span>` : "";
             const icon = a.action === "download-all" ? "📦" : "📄";
             const label = a.action === "download-all" ? "전체 ZIP 다운로드" : name;
-            return `<a class="attach-chip" href="/api/attachment?${aqs}" download rel="noopener">${icon} ${esc(label)}${size}</a>`;
+            return `<button type="button" class="attach-chip" data-attach-url="/api/attachment?${aqs}" data-attach-name="${esc(label)}">${icon} ${esc(label)}${size}</button>`;
           }).join("");
           panel.innerHTML = `<div class="attach-chips">${chips}</div>`;
-          // Auto-trigger 전체 다운로드 (zip bundle) right after the panel
-          // renders. Falls back to no-op if KDSIS didn't expose a bulk button.
-          const bulk = list.find((a) => a.action === "download-all" || (a.name && a.name.trim() === "전체 다운로드"));
-          if (bulk) {
-            const bqs = new URLSearchParams({ params: paramsJson, key: spec, id: String(bulk.id) }).toString();
-            const link = document.createElement("a");
-            link.href = `/api/attachment?${bqs}`;
-            link.download = "";
-            link.rel = "noopener";
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-          }
         }
         const fileCount = list.filter((a) => a.action !== "download-all").length;
         block.dataset.loaded = "1";
