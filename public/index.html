@@ -38,6 +38,7 @@
       --primary-soft:#E8EFF8;--primary-soft-text:#244A8E;
       --green:#15803D;--green-dark:#15803D;
       --error:#B91C1C;--warning:#B45309;
+      --info:#1E40AF;--info-tint:#DBEAFE;--info-border:#93C5FD;
       /* Light surfaces */
       --bg:#F4F6F8;--surface:#FFFFFF;--surface-alt:#EDF0F4;--surface-hover:#F8FAFB;
       --text:#1F2937;--muted:#6B7280;--text-tertiary:#9CA3AF;
@@ -66,6 +67,7 @@
       --primary:#6B95E0;--primary-light:#A8C0EC;--primary-dark:#3F62A6;
       --primary-soft:rgba(107,149,224,.16);--primary-soft-text:#A8C0EC;
       --green:#22C55E;--green-dark:#22C55E;
+      --info:#93C5FD;--info-tint:rgba(96,165,250,.18);--info-border:rgba(96,165,250,.35);
       --primary-tint:rgba(107,149,224,.18);
       --primary-tint-strong:rgba(107,149,224,.26);
       --primary-row:rgba(107,149,224,.10);
@@ -96,8 +98,14 @@
     .app{display:flex;flex-direction:column;height:100dvh;min-height:100vh}
     .header{display:flex;align-items:center;gap:1rem;padding:.75rem 1.5rem;background:var(--surface);border-bottom:1px solid var(--border);min-height:56px}
     .header h1{font-size:1.0625rem;font-weight:600;flex:1}
-    .status{font-size:.8125rem;color:var(--green);font-weight:500}
+    /* Status — green/orange dot via ::before so dynamic textContent updates
+       (statusEl.textContent = "...") don't strip the dot.  Mobile shows
+       the dot only; desktop reveals the label too for QB hierarchy. */
+    .status{font-size:.75rem;color:var(--muted);font-weight:500;letter-spacing:-.01em;display:inline-flex;align-items:center;gap:.375rem;flex-shrink:0}
+    .status::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0}
     .status.busy{color:var(--warning)}
+    .status.busy::before{background:var(--warning);animation:pulse 1.6s ease-in-out infinite}
+    @media (max-width:480px){.status-label{display:none}}
     .reset-btn{flex-shrink:0;display:inline-flex;align-items:center;gap:.25rem;font-size:.8125rem;font-weight:500;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:.375rem .625rem;cursor:pointer;font-family:var(--font);transition:all .15s}
     .reset-btn:hover{color:var(--primary);border-color:var(--primary-light);background:var(--surface-alt)}
     .reset-btn:disabled{opacity:.5;cursor:not-allowed}
@@ -360,7 +368,8 @@
     .toast{display:inline-flex;align-items:center;gap:.625rem;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--r-md);padding:.625rem 1rem;font-size:.875rem;font-weight:500;box-shadow:var(--sh-md);pointer-events:auto;animation:toastIn .25s ease-out;max-width:90vw}
     .toast.toast--success{border-color:var(--green);color:var(--green-dark)}
     .toast.toast--error{border-color:var(--error);color:var(--error)}
-    .toast.toast--info{border-color:var(--primary-light);color:var(--primary)}
+    .toast.toast--info{border-color:var(--info-border);color:var(--info);background:var(--info-tint)}
+    [data-theme="dark"] .toast.toast--info{background:var(--info-tint);color:var(--info)}
     .toast.leaving{animation:toastOut .2s ease-in forwards}
     .toast .toast-icon{flex-shrink:0;font-size:1rem;line-height:1}
     @keyframes toastIn{from{opacity:0;transform:translateY(.75rem)}to{opacity:1;transform:translateY(0)}}
@@ -604,7 +613,7 @@
   <div class="app">
     <header class="header" role="banner">
       <h1>🎖️ 국방 AI 어시스턴트 — KDSIS 실시간 검색</h1>
-      <span class="status" id="status" role="status" aria-live="polite">● 온라인</span>
+      <span class="status" id="status" role="status" aria-live="polite">온라인</span>
       <button class="icon-btn" id="shareBtn" type="button" aria-label="현재 검색 공유 링크 복사" title="공유 링크 복사 (Shift+S)">
         <span aria-hidden="true">🔗</span>
       </button>
@@ -3252,9 +3261,7 @@ if (detailModal) {
     const specNo = _dmCurrent.row["규격번호"];
     if (!specNo) return;
     try { navigator.clipboard && navigator.clipboard.writeText(specNo); } catch (e) {}
-    const url = (typeof KDSIS_PORTAL_URL === "string" && KDSIS_PORTAL_URL)
-      ? KDSIS_PORTAL_URL : "https://kdsis.dapa.go.kr/";
-    window.open(url, "_blank", "noopener");
+    window.open("https://kdsis.dapa.go.kr/", "_blank", "noopener");
     toast(`${specNo} 복사됨 — KDSIS 새 탭이 열렸습니다`, "info");
   });
   const dmDownloadAll = document.getElementById("dmDownloadAll");
