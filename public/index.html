@@ -520,6 +520,8 @@
     .sb-item-title{font-size:12.5px;color:var(--text);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .sb-item-meta{font-size:11px;color:var(--text-tertiary);letter-spacing:-.01em;margin-top:2px}
     .sb-saved-row{display:flex;align-items:center;gap:8px;padding:8px 10px}
+    .sb-action-row{width:100%;border:none;background:transparent;border-radius:6px;cursor:pointer;text-align:left;font-family:var(--font);color:var(--text)}
+    .sb-action-row:hover{background:var(--surface-hover)}
     .sb-saved-row svg{flex-shrink:0;color:var(--text-tertiary)}
     .sb-empty{padding:8px 10px;font-size:12px;color:var(--text-tertiary);letter-spacing:-.01em}
     .sb-foot{border-top:1px solid var(--divider);padding:10px;display:flex;align-items:center;gap:10px}
@@ -569,6 +571,9 @@
     .fb-dist-bar{height:7px;border-radius:999px;background:var(--surface-alt);overflow:hidden}
     .fb-dist-fill{height:100%;width:0%;background:var(--primary);border-radius:inherit}
     .fb-list{display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto}
+    .fb-list-section{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:2px 0 8px}
+    .fb-list-title{font-size:13px;font-weight:600;color:var(--text);letter-spacing:-.01em}
+    .fb-list-subtitle{font-size:11px;color:var(--text-tertiary);letter-spacing:-.01em;white-space:nowrap}
     .fb-list-item{position:relative;border:1px solid var(--border);border-radius:10px;padding:10px 12px 10px 44px;background:var(--surface)}
     .fb-list-item::before{content:"익";position:absolute;left:12px;top:11px;width:22px;height:22px;border-radius:50%;background:var(--primary-soft);color:var(--primary-soft-text);display:flex;align-items:center;justify-content:center;font-family:var(--font);font-size:10px;font-weight:700}
     .fb-list-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
@@ -576,6 +581,8 @@
     .fb-list-time{font-size:11px;color:var(--text-tertiary)}
     .fb-list-comment{font-size:13px;line-height:1.55;color:var(--text);white-space:pre-wrap;word-break:break-word}
     .fb-empty-panel{border:1px dashed var(--border);border-radius:10px;padding:18px 14px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5}
+    .fb-view-comments-btn{width:100%;height:36px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);color:var(--primary);font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;margin-top:10px}
+    .fb-view-comments-btn:hover{background:var(--surface-hover);border-color:var(--primary-light)}
 
     /* Header hamburger */
     .icon-btn.hamburger{order:99}
@@ -830,6 +837,20 @@
       <div id="sbSavedList">
         <div class="sb-empty">저장한 검색이 없습니다</div>
       </div>
+      <div class="sb-listhead" style="padding-top:14px">의견</div>
+      <button class="sb-saved-row sb-action-row" type="button" id="sbFeedbackSummaryLink">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M3 12V7M8 12V4M13 12V9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          <path d="M2 12.5h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+        <span>남긴 의견 보기</span>
+      </button>
+      <button class="sb-saved-row sb-action-row" type="button" id="sbFeedbackLink">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M3 4h10v6H7l-3 3v-3H3V4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        </svg>
+        <span>의견 남기기</span>
+      </button>
     </div>
     <div class="sb-foot">
       <div class="sb-avatar" aria-hidden="true">익명</div>
@@ -3117,6 +3138,8 @@ const sbSearchInput = document.getElementById("sbSearchInput");
 const sbNewChatBtn = document.getElementById("sbNewChatBtn");
 const sbFeedbackBtn = document.getElementById("sbFeedbackBtn");
 const sbFeedbackSummaryBtn = document.getElementById("sbFeedbackSummaryBtn");
+const sbFeedbackLink = document.getElementById("sbFeedbackLink");
+const sbFeedbackSummaryLink = document.getElementById("sbFeedbackSummaryLink");
 const sbHomeBtn = document.getElementById("sbHomeBtn");
 const mobileHomeBtn = document.getElementById("mobileHomeBtn");
 
@@ -3301,11 +3324,13 @@ function closeFeedbackModal() {
   if (!feedbackModal) return;
   feedbackModal.hidden = true;
 }
-if (sbFeedbackBtn) sbFeedbackBtn.addEventListener("click", () => {
+function openFeedbackFromSidebar() {
   const delay = isDesktopVP() ? 0 : 280;
   if (!isDesktopVP()) closeSidebar();
   setTimeout(openFeedbackModal, delay);
-});
+}
+if (sbFeedbackBtn) sbFeedbackBtn.addEventListener("click", openFeedbackFromSidebar);
+if (sbFeedbackLink) sbFeedbackLink.addEventListener("click", openFeedbackFromSidebar);
 if (feedbackModal) {
   feedbackModal.addEventListener("click", (e) => {
     if (e.target.matches("[data-modal-close]")) closeFeedbackModal();
@@ -3330,8 +3355,9 @@ if (feedbackForm) {
         try { const d = await res.json(); if (d && d.error) msg = d.error; } catch (e) {}
         throw new Error(msg);
       }
-      toast("피드백 감사합니다", "success", 2400);
+      toast("피드백 감사합니다. 남긴 의견 목록을 열게요.", "success", 2400);
       closeFeedbackModal();
+      openFeedbackSummaryModal();
     } catch (err) {
       toast(`전송 실패: ${err.message || err}`, "error", 3000);
       fbSubmitBtn.disabled = false;
@@ -3376,7 +3402,8 @@ function renderFeedbackSummary(data) {
     </div>`;
   }).join("");
   const items = Array.isArray(data && data.items) ? data.items : [];
-  const listHtml = items.length ? items.map(item => {
+  const commentItems = items.filter(item => String(item.comment || "").trim().length > 0);
+  const listHtml = commentItems.length ? commentItems.map(item => {
     const rating = Math.max(1, Math.min(5, parseInt(item.rating, 10) || 0));
     const comment = String(item.comment || "").trim();
     return `<article class="fb-list-item">
@@ -3384,17 +3411,21 @@ function renderFeedbackSummary(data) {
         <span class="fb-list-rating">${rating}점 · ${esc(FB_LABELS[rating] || "")}</span>
         <span class="fb-list-time">${esc(_feedbackTime(item.ts))}</span>
       </div>
-      <div class="fb-list-comment">${comment ? esc(comment) : '<span style="color:var(--text-tertiary)">별점만 남겼습니다.</span>'}</div>
+      <div class="fb-list-comment">${esc(comment)}</div>
     </article>`;
-  }).join("") : `<div class="fb-empty-panel">아직 받은 별점이 없습니다.</div>`;
+  }).join("") : `<div class="fb-empty-panel">${count ? "아직 글로 남긴 의견은 없습니다. 별점만 남긴 항목이 있습니다." : "아직 받은 의견이 없습니다."}</div>`;
   fbSummaryContent.className = "";
   fbSummaryContent.innerHTML = `
     <div class="fb-summary-grid">
       <div class="fb-stat"><div class="fb-stat-label">전체</div><div class="fb-stat-value">${count}</div></div>
       <div class="fb-stat"><div class="fb-stat-label">평균</div><div class="fb-stat-value">${avg ? avg.toFixed(1) : "0.0"}</div></div>
-      <div class="fb-stat"><div class="fb-stat-label">최근</div><div class="fb-stat-value">${items.length}</div></div>
+      <div class="fb-stat"><div class="fb-stat-label">의견</div><div class="fb-stat-value">${commentItems.length}</div></div>
     </div>
     <div class="fb-dist">${distHtml}</div>
+    <div class="fb-list-section">
+      <div class="fb-list-title">남긴 의견</div>
+      <div class="fb-list-subtitle">최근 ${commentItems.length}개 표시</div>
+    </div>
     <div class="fb-list">${listHtml}</div>`;
 }
 async function loadFeedbackSummary() {
@@ -3420,11 +3451,13 @@ async function loadFeedbackSummary() {
   }
 }
 if (fbSummaryLoadBtn) fbSummaryLoadBtn.addEventListener("click", loadFeedbackSummary);
-if (sbFeedbackSummaryBtn) sbFeedbackSummaryBtn.addEventListener("click", () => {
+function openFeedbackSummaryFromSidebar() {
   const delay = isDesktopVP() ? 0 : 280;
   if (!isDesktopVP()) closeSidebar();
   setTimeout(openFeedbackSummaryModal, delay);
-});
+}
+if (sbFeedbackSummaryBtn) sbFeedbackSummaryBtn.addEventListener("click", openFeedbackSummaryFromSidebar);
+if (sbFeedbackSummaryLink) sbFeedbackSummaryLink.addEventListener("click", openFeedbackSummaryFromSidebar);
 if (feedbackSummaryModal) {
   feedbackSummaryModal.addEventListener("click", (e) => {
     if (e.target.matches("[data-modal-close]")) closeFeedbackSummaryModal();
