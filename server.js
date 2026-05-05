@@ -2656,6 +2656,63 @@ function formatResultsForChat(params, results) {
 // ── API 엔드포인트 ───────────────────────────────────────
 
 // POST /api/search — 자연어 검색
+function hasSearchRows(results) {
+  return Array.isArray(results?.rows) && results.rows.length > 0;
+}
+
+function fallbackParamCandidates(params) {
+  const entries = Object.entries(params || {}).filter(([_, v]) => String(v || "").trim());
+  if (entries.length !== 1 || !params["규격서명"]) return [];
+
+  const raw = String(params["규격서명"] || "").trim();
+  const compact = raw.replace(/\s+/g, "");
+  const candidates = [];
+  const addTitle = (value, reason) => {
+    const title = String(value || "").trim();
+    if (!title || title === raw || title === compact) return;
+    if (candidates.some((c) => c.params["규격서명"] === title)) return;
+    candidates.push({ params: { "규격서명": title }, reason });
+  };
+
+  const caliber = raw.match(/구경\s*\d+\s*(?:미리|밀리|mm)/i);
+  if (caliber) addTitle(caliber[0].replace(/\s+/g, ""), "caliber-keyword");
+
+  raw.split(/[\s,./()·ㆍ-]+/).forEach((token) => {
+    const clean = token.trim();
+    if (clean.length >= 2 && /[가-힣A-Za-z]/.test(clean)) addTitle(clean, "title-token");
+  });
+
+  if (compact.length >= 6 && /[가-힣]/.test(compact)) {
+    addTitle(compact.slice(0, 6), "title-prefix");
+  }
+
+  return candidates.slice(0, 4);
+}
+
+async function searchKDSISWithFallback(params) {
+  const primary = await searchKDSIS(params);
+  if (hasSearchRows(primary) || primary?.error) {
+    return { params, results: primary, fallback: null };
+  }
+
+  for (const candidate of fallbackParamCandidates(params)) {
+    const results = await searchKDSIS(candidate.params);
+    if (hasSearchRows(results)) {
+      return {
+        params: candidate.params,
+        results,
+        fallback: {
+          reason: candidate.reason,
+          originalParams: params,
+          usedParams: candidate.params,
+        },
+      };
+    }
+  }
+
+  return { params, results: primary, fallback: null };
+}
+
 app.post("/api/search", async (req, res) => {
   const { query } = req.body;
   if (!query || typeof query !== "string") {
@@ -2679,11 +2736,12 @@ app.post("/api/search", async (req, res) => {
     }
 
     // 2) KDSIS 자동 검색
-    const results = await searchKDSIS(params);
+    const search = await searchKDSISWithFallback(params);
 
     // 3) 응답 포맷
-    const response = formatResultsForChat(params, results);
-    response.verification = await verifySearchResponse({ query, params, response });
+    const response = formatResultsForChat(search.params, search.results);
+    if (search.fallback) response.fallback = search.fallback;
+    response.verification = await verifySearchResponse({ query, params: search.params, response });
     console.log(`[결과] ${response.type}: ${response.rows?.length || 0}건`);
     console.log("═".repeat(50));
 
@@ -2707,9 +2765,10 @@ app.post("/api/search/direct", async (req, res) => {
 
   try {
     console.log(`\n[직접 검색]`, params);
-    const results = await searchKDSIS(params);
-    const response = formatResultsForChat(params, results);
-    response.verification = await verifySearchResponse({ params, response });
+    const search = await searchKDSISWithFallback(params);
+    const response = formatResultsForChat(search.params, search.results);
+    if (search.fallback) response.fallback = search.fallback;
+    response.verification = await verifySearchResponse({ params: search.params, response });
     res.json(response);
   } catch (err) {
     console.error("[/api/search/direct] 처리 중 에러:", err);
@@ -2782,9 +2841,10 @@ app.post("/api/search/batch", async (req, res) => {
           });
           return;
         }
-        const results = await searchKDSIS(params);
-        const response = formatResultsForChat(params, results);
-        response.verification = await verifySearchResponse({ query: q.query, params, response });
+        const search = await searchKDSISWithFallback(params);
+        const response = formatResultsForChat(search.params, search.results);
+        if (search.fallback) response.fallback = search.fallback;
+        response.verification = await verifySearchResponse({ query: q.query, params: search.params, response });
         write({ type: "result", id: q.id, query: q.query, params, ...response });
       } catch (err) {
         console.error(`[/api/search/batch] id=${q.id} 실패:`, err.message);
