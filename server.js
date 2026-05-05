@@ -29,6 +29,7 @@ const {
   withTimeout,
   isTransient,
   auditResults,
+  verifyResultsByParams,
   createRateLimiter,
   createByteBoundedCache,
   createConcurrentQueue,
@@ -171,6 +172,8 @@ function currentBlockCount() {
 const AI_PROVIDER = (process.env.AI_PROVIDER || "claude").toLowerCase();
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const RESULT_VERIFY_AI = process.env.KDSIS_RESULT_VERIFY_AI !== "0";
+const RESULT_VERIFY_SAMPLE_ROWS = Math.max(1, Number(process.env.KDSIS_RESULT_VERIFY_SAMPLE_ROWS || 12));
 
 // KDSIS가 화면 리뉴얼할 때마다 검색 버튼 id가 조금씩 바뀌어 왔다. 한 개만
 // 믿지 말고 관찰된 후보를 순서대로 시도한다. 진단 모드와 메인 검색 경로가
@@ -665,7 +668,9 @@ function parseWithRules(text) {
   const lower = text.toLowerCase();
 
   const specNoMatch = text.match(/[A-Z]{2,3}[\s\-]?\d{3,5}[\s\-]?\d{0,5}/i);
-  if (specNoMatch) params["규격번호"] = specNoMatch[0].trim();
+  const numericSpecNoMatch = specNoMatch ? null : text.match(/(?:^|[^\d])(\d{4}[\s\-]\d{4})(?![\s\-]?\d)/);
+  const specNoValue = specNoMatch ? specNoMatch[0].trim() : numericSpecNoMatch?.[1]?.trim();
+  if (specNoValue) params["규격번호"] = specNoValue;
 
   const nsnMatch = text.match(/\d{4}-\d{2}-\d{3}-\d{4}/);
   if (nsnMatch) params["재고번호"] = nsnMatch[0];
@@ -693,7 +698,7 @@ function parseWithRules(text) {
   }
 
   const drawingMatch = text.match(/[A-Z]{1,3}-?\d{5,}/i);
-  if (drawingMatch && !specNoMatch) params["도면번호"] = drawingMatch[0];
+  if (drawingMatch && !specNoValue) params["도면번호"] = drawingMatch[0];
 
   if (Object.keys(params).length === 0) {
     const cleaned = text
@@ -730,6 +735,121 @@ async function parseQuery(text) {
   }
 
   return parseWithRules(text);
+}
+
+function extractJsonObject(text) {
+  const raw = String(text || "").replace(/```json|```/g, "").trim();
+  try { return JSON.parse(raw); } catch {}
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    return JSON.parse(raw.slice(start, end + 1));
+  }
+  throw new Error("AI verification did not return JSON");
+}
+
+function coerceVerificationStatus(status, fallbackStatus) {
+  const s = String(status || "").toLowerCase();
+  return ["pass", "warn", "fail", "empty"].includes(s) ? s : fallbackStatus;
+}
+
+function sanitizeAiVerification(ai, fallback) {
+  const warnings = Array.isArray(ai.warnings)
+    ? ai.warnings.map((w) => String(w).trim()).filter(Boolean).slice(0, 5)
+    : [];
+  return {
+    ...fallback,
+    method: "ai",
+    status: coerceVerificationStatus(ai.status, fallback.status),
+    confidence: Math.max(0, Math.min(1, Number(ai.confidence ?? fallback.confidence ?? 0.5))),
+    summary: String(ai.summary || fallback.summary || "").slice(0, 180),
+    warnings: warnings.length > 0 ? warnings : fallback.warnings,
+    aiChecked: true,
+    rules: fallback,
+  };
+}
+
+async function verifyWithClaude(payload) {
+  const system = `You are a strict QA reviewer for KDSIS search results.
+Given a user query, parsed search params, deterministic rule checks, and sample returned rows, decide whether the returned rows match the user's intent.
+Return JSON only with:
+{"status":"pass|warn|fail|empty","confidence":0-1,"summary":"short Korean sentence","warnings":["short Korean warning"]}
+Do not invent facts beyond the provided rows. Prefer "warn" over "fail" when evidence is incomplete.`;
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 320,
+      temperature: 0,
+      system,
+      messages: [{ role: "user", content: JSON.stringify(payload) }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Claude verification failed: HTTP ${res.status}`);
+  const data = await res.json();
+  return extractJsonObject(data.content?.[0]?.text || "{}");
+}
+
+async function verifyWithGemini(payload) {
+  const prompt = `You are a strict QA reviewer for KDSIS search results.
+Return JSON only with {"status":"pass|warn|fail|empty","confidence":0-1,"summary":"short Korean sentence","warnings":["short Korean warning"]}.
+Prefer "warn" over "fail" when evidence is incomplete.
+
+Input:
+${JSON.stringify(payload)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0, maxOutputTokens: 320 },
+    }),
+  });
+  if (!res.ok) throw new Error(`Gemini verification failed: HTTP ${res.status}`);
+  const data = await res.json();
+  return extractJsonObject(data.candidates?.[0]?.content?.parts?.[0]?.text || "{}");
+}
+
+async function verifySearchResponse({ query = "", params = {}, response }) {
+  const rows = Array.isArray(response?.rows) ? response.rows : [];
+  const fallback = verifyResultsByParams(params, response, { sampleLimit: RESULT_VERIFY_SAMPLE_ROWS });
+  const useAI =
+    RESULT_VERIFY_AI &&
+    response &&
+    response.type !== "error" &&
+    ((AI_PROVIDER === "claude" && ANTHROPIC_API_KEY) || (AI_PROVIDER === "gemini" && GEMINI_API_KEY));
+
+  if (!useAI) return fallback;
+
+  const payload = {
+    query,
+    searchParams: params,
+    resultType: response.type,
+    totalCount: response.totalCount || rows.length || 0,
+    sampledRows: rows.slice(0, RESULT_VERIFY_SAMPLE_ROWS),
+    ruleCheck: fallback,
+  };
+
+  try {
+    const ai =
+      AI_PROVIDER === "claude"
+        ? await verifyWithClaude(payload)
+        : await verifyWithGemini(payload);
+    return sanitizeAiVerification(ai, fallback);
+  } catch (err) {
+    console.warn("[AI][verify] failed, using rule verification:", err.message);
+    return {
+      ...fallback,
+      aiChecked: false,
+      aiError: err.message,
+    };
+  }
 }
 
 // ── Playwright로 KDSIS 검색 실행 ─────────────────────────
@@ -801,6 +921,9 @@ async function _runSearch(params) {
           rows: audited.rows,
           columns: audited.columns,
           totalCount: audited.totalCount || audited.rows.length,
+          source: result.source,
+          activeGridId: result.activeGridId,
+          scrollIncomplete: result.scrollIncomplete,
         };
       }
       return result;
@@ -905,7 +1028,7 @@ async function _runSearchOnce(params) {
     //   실제로 존재하는 첫 후보를 골라 본 검색과 스크롤 루프에서 공유한다.
     console.log("[KDSIS] 결과 파싱 중...");
     const parsed = await page.evaluate((gridIds) => {
-      const data = { rows: [], columns: [], totalCount: 0, activeGridId: null };
+      const data = { rows: [], columns: [], totalCount: 0, activeGridId: null, source: "dom" };
 
       // 실제로 DOM에 붙어있는 첫 후보를 고른다.
       const gridId = gridIds.find((g) => !!document.getElementById(`${g}_body_tbody`));
@@ -932,6 +1055,57 @@ async function _runSearchOnce(params) {
       }
       data.columns = headOrder.slice();
 
+      const clean = (value) =>
+        String(value ?? "")
+          .replace(/\u00a0/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      const decodeCell = (columnName, value) => {
+        const text = clean(value);
+        if (columnName === "공개여부") {
+          return ({ A: "전체공개", Y: "공개", N: "비공개", P: "부분공개" }[text]) || text;
+        }
+        if (columnName === "상태" || columnName === "규격상태") {
+          return ({ A: "활성", B: "비활성", I: "비활성", C: "폐지", D: "폐지", E: "전환", T: "전환" }[text]) || text;
+        }
+        return text;
+      };
+      const hasData = (rowData) => Object.values(rowData).some((v) => v && String(v).trim().length > 0);
+      const getComponent = (id) => {
+        const candidates = [];
+        candidates.push(window[id]);
+        if (window.scwin) candidates.push(window.scwin[id]);
+        if (window.$p && typeof window.$p.getComponentById === "function") {
+          try { candidates.push(window.$p.getComponentById(id)); } catch {}
+        }
+        return candidates.find(
+          (c) => c && typeof c.getRowCount === "function" && typeof c.getCellData === "function"
+        );
+      };
+
+      // ── WebSquare component API 우선 파싱 ──
+      // KDSIS w2grid는 화면 DOM에는 보이는 10개 행만 두고 세로 스크롤 시
+      // 같은 DOM 노드를 재사용한다. 하지만 component data store에는 전체
+      // 검색 결과가 이미 들어 있으므로 getRowCount/getCellData가 가장
+      // 정확하고 빠른 경로다. DOM 파싱은 component API가 막힐 때의 폴백.
+      const grid = getComponent(gridId);
+      if (grid && headOrder.length > 0) {
+        const count = Number(grid.getRowCount()) || 0;
+        for (let r = 0; r < count; r++) {
+          const rowData = {};
+          for (let c = 0; c < headOrder.length; c++) {
+            const name = headOrder[c] || `col_${c}`;
+            let value = "";
+            try { value = grid.getCellData(r, c); } catch {}
+            rowData[name] = decodeCell(name, value);
+          }
+          if (hasData(rowData)) data.rows.push(rowData);
+        }
+        if (data.rows.length > 0) {
+          data.source = "grid-api";
+        }
+      }
+
       // ── tbody 행 파싱 ──
       // thead col_id(column53 등)와 td col_id(stdrdKndNm 등)는 서로 다른
       // 네임스페이스라 속성값으로 매칭하면 안 됨. td 순서 기반으로 짝짓는다.
@@ -939,28 +1113,29 @@ async function _runSearchOnce(params) {
       const tbody = document.getElementById(`${gridId}_body_tbody`);
       if (!tbody) return data;
 
-      const trs = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
-      trs.forEach((tr) => {
-        const rowData = {};
-        const tds = Array.from(tr.querySelectorAll("td")).filter(
-          (td) => !(td.id || "").startsWith("_headerRowNumber_")
-        );
-        tds.forEach((td, idx) => {
-          const name = headOrder[idx] || `col_${idx}`;
-          const link = td.querySelector("a");
-          const span = td.querySelector("span.w2grid_span");
-          let text = "";
-          if (link && link.textContent.trim()) text = link.textContent.trim();
-          else if (span) text = span.textContent.trim();
-          else text = (td.textContent || "").trim();
-          rowData[name] = text;
+      if (data.rows.length === 0) {
+        const trs = tbody.querySelectorAll("tr.grid_body_row, tr[class*='grid_body']");
+        trs.forEach((tr) => {
+          const rowData = {};
+          const tds = Array.from(tr.querySelectorAll("td")).filter(
+            (td) => !(td.id || "").startsWith("_headerRowNumber_")
+          );
+          tds.forEach((td, idx) => {
+            const name = headOrder[idx] || `col_${idx}`;
+            const link = td.querySelector("a");
+            const span = td.querySelector("span.w2grid_span");
+            let text = "";
+            if (link && link.textContent.trim()) text = link.textContent.trim();
+            else if (span) text = span.textContent.trim();
+            else text = (td.textContent || "").trim();
+            rowData[name] = text;
+          });
+          if (headOrder.length === 0 && data.columns.length === 0) {
+            data.columns = Object.keys(rowData);
+          }
+          if (hasData(rowData)) data.rows.push(rowData);
         });
-        if (headOrder.length === 0 && data.columns.length === 0) {
-          data.columns = Object.keys(rowData);
-        }
-        const hasData = Object.values(rowData).some((v) => v && v.length > 0);
-        if (hasData) data.rows.push(rowData);
-      });
+      }
 
       // ── 총 건수 추출 — 고정 id가 아니라 id$="listCnt" 패턴을 쓴다 ──
       const cntEls = document.querySelectorAll('[id$="listCnt"], #spn_listCnt');
@@ -968,7 +1143,7 @@ async function _runSearchOnce(params) {
         const m = (el.textContent || "").match(/[\d,]+/);
         if (m) { data.totalCount = parseInt(m[0].replace(/,/g, "")); break; }
       }
-      if (!data.totalCount) data.totalCount = data.rows.length;
+      if (!data.totalCount || data.totalCount < data.rows.length) data.totalCount = data.rows.length;
 
       return data;
     }, GRID_ID_CANDIDATES);
@@ -978,7 +1153,7 @@ async function _runSearchOnce(params) {
       console.log(`[KDSIS] 활성 grid id: ${parsed.activeGridId}`);
     }
 
-    // 6) 무한 스크롤 — 추가 데이터 로딩
+    // 6) 무한 스크롤 — component API가 막힌 경우에만 추가 데이터 로딩
     //   매 스크롤마다 thead를 다시 읽어서 동적 파싱 — col_id 하드코딩 없음.
     //   MAX_SCROLLS는 안전 상한선일 뿐, 새 행이 안 올라오면 즉시 break 한다.
     //   totalCount 게이트를 두지 않는다 — #spn_listCnt 파싱이 실패해 totalCount가
@@ -989,7 +1164,7 @@ async function _runSearchOnce(params) {
     // 알려진 경우 행이 다 차면 즉시 break 하므로 평균 비용은 훨씬 적다.
     // dc2b004 의 5는 totalCount=230 결과를 ~50행에서 자르는 회귀를 만들었음.
     const MAX_SCROLLS = Number(process.env.KDSIS_MAX_SCROLLS || 25);
-    if (results.rows.length > 0) {
+    if (results.source !== "grid-api" && results.rows.length > 0) {
       console.log(`[KDSIS] 무한 스크롤 시작 (현재 ${results.rows.length}건 / 총 ${results.totalCount}건)`);
 
       for (let i = 0; i < MAX_SCROLLS; i++) {
@@ -2472,6 +2647,9 @@ function formatResultsForChat(params, results) {
     columns: results.columns,
     rows: results.rows,
     totalCount: results.totalCount || results.rows.length,
+    source: results.source,
+    activeGridId: results.activeGridId,
+    scrollIncomplete: results.scrollIncomplete,
   };
 }
 
@@ -2505,6 +2683,7 @@ app.post("/api/search", async (req, res) => {
 
     // 3) 응답 포맷
     const response = formatResultsForChat(params, results);
+    response.verification = await verifySearchResponse({ query, params, response });
     console.log(`[결과] ${response.type}: ${response.rows?.length || 0}건`);
     console.log("═".repeat(50));
 
@@ -2530,6 +2709,7 @@ app.post("/api/search/direct", async (req, res) => {
     console.log(`\n[직접 검색]`, params);
     const results = await searchKDSIS(params);
     const response = formatResultsForChat(params, results);
+    response.verification = await verifySearchResponse({ params, response });
     res.json(response);
   } catch (err) {
     console.error("[/api/search/direct] 처리 중 에러:", err);
@@ -2604,6 +2784,7 @@ app.post("/api/search/batch", async (req, res) => {
         }
         const results = await searchKDSIS(params);
         const response = formatResultsForChat(params, results);
+        response.verification = await verifySearchResponse({ query: q.query, params, response });
         write({ type: "result", id: q.id, query: q.query, params, ...response });
       } catch (err) {
         console.error(`[/api/search/batch] id=${q.id} 실패:`, err.message);
@@ -3234,6 +3415,11 @@ app.get("/api/health", (req, res) => {
 //   - in-memory ring buffer (최근 200건) + JSONL append
 //   - 익명: client IP 는 SHA-256 해시 12자만 저장 (역추적 불가, dedup용)
 //
+// GET /api/feedback/public
+//   - 익명 사용자도 볼 수 있는 공개 댓글 피드
+//   - 응답: { stats: {count, avg, distribution}, items: [{id, ts, rating, comment}] }
+//   - ipHash / ua 같은 내부 필드는 공개하지 않음
+//
 // GET /api/feedback?token=<FEEDBACK_ADMIN_TOKEN>
 //   - 토큰 미설정 시 404 (관리자 조회 비활성)
 //   - 응답: { stats: {count, avg, distribution}, items: [...] }
@@ -3256,6 +3442,61 @@ function _hashIp(ip) {
     .digest("hex")
     .slice(0, 12);
 }
+
+function _feedbackStats() {
+  const dist = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  let sum = 0;
+  for (const e of feedbackRing) {
+    dist[e.rating] = (dist[e.rating] || 0) + 1;
+    sum += e.rating;
+  }
+  return {
+    count: feedbackRing.length,
+    avg: feedbackRing.length ? Math.round((sum / feedbackRing.length) * 10) / 10 : 0,
+    distribution: dist,
+  };
+}
+
+function _publicFeedbackEntry(entry) {
+  return {
+    id: entry.id,
+    ts: entry.ts,
+    rating: entry.rating,
+    comment: entry.comment,
+  };
+}
+
+function _loadFeedbackLog() {
+  try {
+    if (!fs.existsSync(FEEDBACK_LOG_FILE)) return;
+    const lines = fs.readFileSync(FEEDBACK_LOG_FILE, "utf-8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(-FEEDBACK_RING_MAX);
+    const loaded = [];
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        const rating = parseInt(entry.rating, 10);
+        if (!Number.isFinite(rating) || rating < 1 || rating > 5) continue;
+        loaded.push({
+          id: String(entry.id || Date.now().toString(36)),
+          ts: entry.ts || new Date().toISOString(),
+          rating,
+          comment: String(entry.comment || "").slice(0, 800),
+          ipHash: entry.ipHash || "",
+          ua: String(entry.ua || "").slice(0, 200),
+        });
+      } catch {}
+    }
+    feedbackRing.push(...loaded.slice(-FEEDBACK_RING_MAX));
+    if (feedbackRing.length) console.log(`[feedback] loaded ${feedbackRing.length} saved reviews`);
+  } catch (err) {
+    console.warn("[feedback] log load failed:", err.message);
+  }
+}
+
+_loadFeedbackLog();
 
 app.post("/api/feedback", (req, res) => {
   const ip = _clientIp(req);
@@ -3290,20 +3531,18 @@ app.post("/api/feedback", (req, res) => {
   res.json({ ok: true, id: entry.id });
 });
 
+app.get("/api/feedback/public", (req, res) => {
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  const items = feedbackRing.slice(-limit).reverse().map(_publicFeedbackEntry);
+  res.json({ ok: true, stats: _feedbackStats(), items });
+});
+
 app.get("/api/feedback", (req, res) => {
   if (!FEEDBACK_ADMIN_TOKEN) return res.status(404).json({ error: "Not found" });
   if (req.query.token !== FEEDBACK_ADMIN_TOKEN) return res.status(401).json({ error: "Unauthorized" });
   const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
   const items = feedbackRing.slice(-limit).reverse();
-  const dist = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-  let sum = 0;
-  for (const e of feedbackRing) { dist[e.rating] = (dist[e.rating] || 0) + 1; sum += e.rating; }
-  const stats = {
-    count: feedbackRing.length,
-    avg: feedbackRing.length ? Math.round((sum / feedbackRing.length) * 10) / 10 : 0,
-    distribution: dist,
-  };
-  res.json({ ok: true, stats, items });
+  res.json({ ok: true, stats: _feedbackStats(), items });
 });
 
 // ── 첨부 프록시 API ───────────────────────────────────────

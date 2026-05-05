@@ -13,6 +13,7 @@ const {
   isTransient,
   expandHeaderCells,
   auditResults,
+  verifyResultsByParams,
   createRateLimiter,
   createByteBoundedCache,
   createConcurrentQueue,
@@ -299,6 +300,49 @@ test("auditResults: missing data defaults to empty result set", () => {
 });
 
 // ── createRateLimiter ──────────────────────────────────────
+
+test("verifyResultsByParams: passes when every sampled row matches params", () => {
+  const out = verifyResultsByParams(
+    { status: "active", specNo: "1005-0409" },
+    {
+      rows: [
+        { status: "active", specNo: "1005-0409", title: "box" },
+        { status: "active", specNo: "1005-0409", title: "box part" },
+      ],
+    }
+  );
+  assert.equal(out.status, "pass");
+  assert.equal(out.checkedCount, 2);
+  assert.equal(out.warnings.length, 0);
+});
+
+test("verifyResultsByParams: warns when only some rows match", () => {
+  const out = verifyResultsByParams(
+    { title: "helmet" },
+    {
+      rows: [
+        { title: "helmet liner" },
+        { title: "rifle sling" },
+      ],
+    }
+  );
+  assert.equal(out.status, "warn");
+  assert.ok(out.warnings[0].includes("title"));
+});
+
+test("verifyResultsByParams: fails when sampled rows do not match params", () => {
+  const out = verifyResultsByParams(
+    { specNo: "1005-9999" },
+    { rows: [{ specNo: "1005-0409" }] }
+  );
+  assert.equal(out.status, "fail");
+});
+
+test("verifyResultsByParams: empty rows return empty verification", () => {
+  const out = verifyResultsByParams({ specNo: "1005-0409" }, { rows: [] });
+  assert.equal(out.status, "empty");
+  assert.equal(out.checkedCount, 0);
+});
 
 test("rateLimiter: allows up to max within window", () => {
   const rl = createRateLimiter({ windowMs: 1000, max: 3 });

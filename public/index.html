@@ -96,6 +96,8 @@
     .header{display:flex;align-items:center;gap:1rem;padding:.75rem 1.5rem;background:var(--surface);border-bottom:1px solid var(--border);min-height:56px}
     .header h1{font-size:1.0625rem;font-weight:600;flex:1}
     .brand-mark-mobile,.brand-copy-mobile{display:none}
+    .brand-home{border:none;cursor:pointer;font:inherit}
+    .brand-home:hover{filter:brightness(.96)}
     .brand-full{display:flex;flex-direction:column;gap:1px;min-width:0}
     .brand-title-desktop{font-size:.9375rem;font-weight:600;color:var(--text);letter-spacing:-.01em;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .brand-subtitle-desktop{font-size:.6875rem;font-weight:500;color:var(--text-tertiary);letter-spacing:-.01em;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -160,6 +162,14 @@
     .result-wrap{width:100%;margin:.75rem 0}
     .result-intro{font-size:.8125rem;color:var(--muted);letter-spacing:-.01em;margin-bottom:.625rem}
     .result-intro strong{color:var(--text);font-weight:600}
+    .verification{display:flex;align-items:flex-start;gap:.5rem;margin:.5rem 0 .625rem;padding:.5rem .625rem;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--surface);font-size:.75rem;line-height:1.45;color:var(--muted)}
+    .verification-badge{flex-shrink:0;display:inline-flex;align-items:center;gap:.25rem;height:22px;padding:0 .5rem;border-radius:var(--r-full);font-weight:600;letter-spacing:-.01em}
+    .verification--pass .verification-badge{background:var(--green-badge);color:var(--green-dark)}
+    .verification--warn .verification-badge,.verification--empty .verification-badge{background:var(--warning-tint);color:var(--warning)}
+    .verification--fail .verification-badge{background:var(--error-tint-strong);color:var(--error)}
+    .verification-main{min-width:0}
+    .verification-summary{color:var(--text);font-weight:500;letter-spacing:-.01em}
+    .verification-meta{margin-top:1px;color:var(--text-tertiary);font-family:var(--mono);font-size:.6875rem;letter-spacing:0}
     .result-footnote{margin-top:.875rem;font-size:.75rem;color:var(--text-tertiary);letter-spacing:-.01em}
     .result-toolbar{display:flex;align-items:center;gap:.375rem;margin-bottom:.875rem;flex-wrap:wrap}
     .chip{font-size:.75rem;padding:4px 10px;border-radius:6px;font-weight:500;background:var(--surface-alt);color:var(--text)}
@@ -198,11 +208,11 @@
     .card:hover{border-color:var(--primary-light);box-shadow:var(--sh-sm)}
     .card:active{transform:scale(.985)}
     .card.selected{border-color:var(--primary);box-shadow:var(--ring)}
-    .card.selected::after{content:"선택됨";position:absolute;right:.875rem;top:.875rem;font-size:.6875rem;font-weight:500;letter-spacing:-.01em;color:var(--primary-soft-text);background:var(--primary-soft);border-radius:4px;padding:3px 8px}
+    .card.selected::after{content:"선택됨";position:absolute;right:.875rem;top:.875rem;height:22px;display:inline-flex;align-items:center;font-size:.6875rem;font-weight:500;letter-spacing:-.01em;color:var(--primary-soft-text);background:var(--primary-soft);border:1px solid var(--primary-tint-strong);border-radius:999px;padding:0 8px}
     .card-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.375rem;flex-wrap:wrap}
     .spec-no{font-family:var(--mono);font-size:.75rem;font-weight:500;color:var(--primary-soft-text);background:var(--primary-soft);padding:3px 8px;border-radius:var(--r-sm);letter-spacing:.02em}
     .spec-kind{font-size:.75rem;color:var(--muted);padding:3px 8px;background:var(--surface-alt);border-radius:var(--r-sm)}
-    .status-badge{font-size:.75rem;font-weight:500;padding:3px 10px;border-radius:var(--r-full);margin-left:auto;letter-spacing:-.01em;border:1px solid transparent}
+    .status-badge{min-height:22px;display:inline-flex;align-items:center;font-size:.75rem;font-weight:500;padding:2px 10px;border-radius:var(--r-full);margin-left:auto;letter-spacing:-.01em;border:1px solid transparent;line-height:1}
     .status-active{background:var(--green-badge);color:var(--green-dark);border-color:#86EFAC}
     [data-theme="dark"] .status-active{border-color:transparent}
     .status-inactive{background:var(--neutral-tint);color:var(--muted)}
@@ -339,6 +349,7 @@
 
     /* Modal — generic dialog */
     .modal{position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;padding:1rem}
+    #feedbackModal,#feedbackSummaryModal,#helpModal{z-index:9200}
     .modal[hidden]{display:none}
     .modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.45);backdrop-filter:blur(2px);animation:fadeIn .2s ease-out}
     .modal-panel{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--sh-md);max-width:480px;width:100%;max-height:calc(100dvh - 2rem);overflow-y:auto;animation:modalIn .25s ease-out}
@@ -412,7 +423,6 @@
       .brand-subtitle-mobile{font-size:.75rem;font-weight:500;color:var(--muted);letter-spacing:-.01em;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
       .brand-subtitle-mobile::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
       .header .status,
-      .header #shareBtn,
       .header #helpBtn,
       .header #themeBtn,
       .header #resetBtn{display:none}
@@ -462,7 +472,7 @@
       .header,.input-area,.toasts,.modal,.recent-panel,.jump-bottom,.skip-link,
       .debug-toggle,.debug-img,.view-toggle,.sort-control,.pagination,
       .msg-actions,.welcome,.sample-wrap,.search-status,.skeleton-cards,
-      .reset-btn,#themeBtn,#shareBtn,#helpBtn,.status,.param-tag .pi,
+      .reset-btn,#themeBtn,#helpBtn,.status,.param-tag .pi,
       .hint,#inputCounter,.recent-empty{display:none !important}
       .messages{overflow:visible !important;padding:0;height:auto;display:block}
       .msg{max-width:100%;margin:0 0 .5rem;padding:0;page-break-inside:avoid}
@@ -489,7 +499,8 @@
     .sidebar.open{transform:translateX(0)}
     .sidebar[hidden]{display:none}
     .sb-head{padding:14px 16px 12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--divider)}
-    .sb-mark{width:28px;height:28px;border-radius:6px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:-.02em;flex-shrink:0}
+    .sb-mark{width:28px;height:28px;border-radius:6px;background:var(--primary);color:#fff;border:none;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:-.02em;flex-shrink:0;cursor:pointer}
+    .sb-mark:hover{background:var(--primary-light)}
     .sb-brand{flex:1;min-width:0}
     .sb-brand-title{font-size:13px;font-weight:600;color:var(--text);letter-spacing:-.01em}
     .sb-brand-sub{font-size:11px;color:var(--muted);letter-spacing:-.01em;margin-top:1px}
@@ -516,6 +527,7 @@
     .sb-foot-meta{flex:1;min-width:0}
     .sb-foot-name{font-size:12px;font-weight:500;color:var(--text);letter-spacing:-.01em}
     .sb-foot-ver{font-size:10.5px;color:var(--text-tertiary);letter-spacing:-.01em}
+    .sb-foot-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
     .sb-fb-btn{width:32px;height:32px;border-radius:6px;background:transparent;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted);flex-shrink:0}
     .sb-fb-btn:hover{color:var(--primary);background:var(--surface-hover)}
 
@@ -542,6 +554,28 @@
     .fb-btn-submit:disabled{opacity:.55;cursor:not-allowed}
     .fb-note{font-size:11.5px;color:var(--text-tertiary);letter-spacing:-.01em;line-height:1.5;display:flex;gap:6px;align-items:flex-start}
     .fb-note svg{flex-shrink:0;margin-top:2px;color:var(--text-tertiary)}
+    .fb-summary-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+    .fb-summary-copy{font-size:12px;line-height:1.5;color:var(--muted);letter-spacing:-.01em;max-width:320px}
+    .fb-refresh{height:34px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);color:var(--text);padding:0 12px;font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap}
+    .fb-refresh:hover{background:var(--surface-hover);border-color:var(--primary-light);color:var(--primary)}
+    .fb-refresh:disabled{opacity:.55;cursor:progress}
+    .fb-summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+    .fb-stat{border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:10px 12px}
+    .fb-stat-label{font-size:11px;color:var(--text-tertiary);letter-spacing:-.01em;margin-bottom:2px}
+    .fb-stat-value{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--text);letter-spacing:-.02em}
+    .fb-dist{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface);margin-bottom:14px}
+    .fb-dist-row{display:grid;grid-template-columns:46px 1fr 34px;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--divider);font-size:12px}
+    .fb-dist-row:last-child{border-bottom:none}
+    .fb-dist-bar{height:7px;border-radius:999px;background:var(--surface-alt);overflow:hidden}
+    .fb-dist-fill{height:100%;width:0%;background:var(--primary);border-radius:inherit}
+    .fb-list{display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto}
+    .fb-list-item{position:relative;border:1px solid var(--border);border-radius:10px;padding:10px 12px 10px 44px;background:var(--surface)}
+    .fb-list-item::before{content:"익";position:absolute;left:12px;top:11px;width:22px;height:22px;border-radius:50%;background:var(--primary-soft);color:var(--primary-soft-text);display:flex;align-items:center;justify-content:center;font-family:var(--font);font-size:10px;font-weight:700}
+    .fb-list-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+    .fb-list-rating{font-family:var(--mono);font-size:12px;font-weight:700;color:#B45309}
+    .fb-list-time{font-size:11px;color:var(--text-tertiary)}
+    .fb-list-comment{font-size:13px;line-height:1.55;color:var(--text);white-space:pre-wrap;word-break:break-word}
+    .fb-empty-panel{border:1px dashed var(--border);border-radius:10px;padding:18px 14px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5}
 
     /* Header hamburger */
     .icon-btn.hamburger{order:99}
@@ -564,7 +598,6 @@
       .header #themeBtn,
       .header #resetBtn,
       .header #menuBtn{display:none}
-      .header #shareBtn{margin-left:auto}
       .sidebar.collapsed{width:56px}
       .sidebar.collapsed .sb-brand,
       .sidebar.collapsed .sb-online,
@@ -575,6 +608,7 @@
       .sidebar.collapsed .sb-empty,
       .sidebar.collapsed .sb-saved-row span,
       .sidebar.collapsed .sb-foot-meta,
+      .sidebar.collapsed .sb-foot-actions,
       .sidebar.collapsed .sb-newchat span,
       .sidebar.collapsed #sidebarCloseBtn{display:none}
       .sidebar.collapsed .sb-head{padding:14px 6px 12px;justify-content:center;gap:0}
@@ -584,9 +618,12 @@
       .sidebar.collapsed .sb-newchat{padding:8px 0;gap:0;justify-content:center}
       .sidebar.collapsed .sb-item{padding:8px 6px;text-align:center}
       .sidebar.collapsed .sb-foot{padding:10px 6px;justify-content:center;gap:0}
+      :root{--detail-width:340px}
       .app{padding-left:256px;padding-right:0;transition:padding-left .22s ease,padding-right .18s ease}
       html.sb-collapsed .app{padding-left:56px}
-      html.detail-open .app{padding-right:300px}
+      html.detail-open .app{padding-right:var(--detail-width)}
+      html.detail-open::after{content:"";position:fixed;top:0;right:0;bottom:0;width:var(--detail-width);background:#fff;z-index:8999;pointer-events:none}
+      [data-theme="dark"].detail-open::after{background:var(--surface)}
       /* 햄버거 버튼은 데스크톱에서 collapse 토글 — 시각적 hint로 회전 */
       .icon-btn.hamburger svg{transition:transform .22s ease}
       html.sb-collapsed .icon-btn.hamburger svg{transform:rotate(90deg)}
@@ -595,9 +632,11 @@
       .result-toolbar{display:none}
       .cards{gap:.5rem}
       .card{padding:.625rem .75rem}
-      .card.selected{box-shadow:none}
-      .card-head{margin-bottom:.125rem;padding-right:4.5rem}
+      .card.selected{box-shadow:none;background:linear-gradient(90deg,var(--surface) 0%,var(--surface) 72%,var(--primary-row) 100%)}
+      .card.selected::after{top:.625rem;right:.75rem}
+      .card-head{margin-bottom:.125rem;padding-right:4.75rem;align-items:center}
       .spec-no,.spec-no.copyable,.spec-kind,.status-badge{font-size:.6875rem;padding:2px 7px}
+      .status-badge{min-height:21px}
       .spec-kind{display:none}
       .card-title{font-size:.875rem;margin-bottom:.125rem;line-height:1.25}
       .card-meta{display:inline-flex;font-size:.71875rem;gap:.25rem .625rem;margin:0 .625rem 0 0;line-height:1.25}
@@ -606,6 +645,9 @@
       .card-meta .mi:nth-child(n+2){display:none}
       .card-dates span:first-child{display:none}
       .card-more,.card .attach-block,.card-tap-hint{display:none !important}
+    }
+    @media (min-width:1280px){
+      :root{--detail-width:360px}
     }
 
     /* ── Detail modal (큰 모달, 시안 Screen 5) ──────────────────
@@ -622,14 +664,16 @@
     .dm-action.copied{color:var(--primary-soft-text);background:var(--primary-soft);border-color:var(--primary-soft)}
 
     @media (min-width:1024px){
-      #detailModal{align-items:stretch;justify-content:flex-end;padding:0;top:64px;left:auto;bottom:0;right:0;width:300px}
+      #detailModal{align-items:stretch;justify-content:flex-end;padding:0;top:0 !important;left:auto;bottom:0;right:0;width:var(--detail-width) !important;background:#fff}
+      [data-theme="dark"] #detailModal{background:var(--surface)}
       #detailModal .modal-backdrop{display:none}
-      #detailModal .detail-panel{width:300px;max-width:none;height:calc(100dvh - 64px);max-height:none;border-radius:0;border-top:none;border-right:none;box-shadow:none;overflow-y:auto;animation:detailPanelIn .18s ease-out}
-      #detailModal .dm-head{border-radius:0;padding:1rem 1rem .875rem}
-      #detailModal .dm-title{font-size:1rem}
-      #detailModal .dm-body{padding:1rem}
+      #detailModal .detail-panel{width:var(--detail-width) !important;max-width:none;height:100dvh !important;max-height:none;border-radius:0;border-top:none;border-right:none;box-shadow:none;overflow-y:auto;animation:detailPanelIn .18s ease-out}
+      #detailModal .dm-head{border-radius:0;padding:1.25rem 1.25rem 1rem}
+      #detailModal .dm-title{font-size:1.0625rem}
+      #detailModal .dm-body{padding:1.125rem 1.25rem}
       #detailModal .dm-actions{gap:.375rem}
       #detailModal .dm-action{padding:.35rem .55rem;font-size:.72rem}
+      #detailModal .dm-field-label{width:90px}
       #detailModal #dmCopyJson,
       #detailModal #dmOpenKdsis,
       #detailModal .dm-section:has(#dmAllFields),
@@ -684,7 +728,7 @@
   <div class="app">
     <header class="header" role="banner">
       <h1 class="brand-heading">
-        <span class="brand-mark-mobile" aria-hidden="true">K</span>
+        <button class="brand-mark-mobile brand-home" id="mobileHomeBtn" type="button" aria-label="홈으로 이동" title="홈으로">K</button>
         <span class="brand-copy-mobile">
           <span class="brand-title-mobile">국방 AI</span>
           <span class="brand-subtitle-mobile" id="mobileHeaderSubtitle">KDSIS 실시간 검색</span>
@@ -695,9 +739,6 @@
         </span>
       </h1>
       <span class="status" id="status" role="status" aria-live="polite">온라인</span>
-      <button class="icon-btn" id="shareBtn" type="button" aria-label="현재 검색 공유 링크 복사" title="공유 링크 복사 (Shift+S)">
-        <span aria-hidden="true">🔗</span>
-      </button>
       <button class="icon-btn" id="helpBtn" type="button" aria-label="키보드 단축키 도움말" aria-haspopup="dialog" title="단축키 (?)">
         <span aria-hidden="true">?</span>
       </button>
@@ -726,10 +767,10 @@
         </div>
         <div class="prompts-label">예시 질문</div>
         <div class="prompts" id="prompts" role="list" aria-label="추천 검색어">
-          <button class="prompt-card" type="button" role="listitem" data-q="K2 소총 활성 규격 보여줘" data-direct-params='{"적용장비명":"K2 소총","규격상태":"활성"}'><span class="prompt-card-text">K2 소총 활성 규격 보여줘</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <button class="prompt-card" type="button" role="listitem" data-q="국방규격 1005-0409 상세 정보" data-direct-params='{"규격번호":"1005-0409"}'><span class="prompt-card-text">국방규격 1005-0409 상세 정보</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="prompt-card" type="button" role="listitem" data-q="국방규격 1005-0552 상세 정보" data-direct-params='{"규격번호":"1005-0552"}'><span class="prompt-card-text">국방규격 1005-0552 상세 정보</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <button class="prompt-card" type="button" role="listitem" data-q="제정기관이 육군인 활성 규격" data-direct-params='{"제정기관":"육군","규격상태":"활성"}'><span class="prompt-card-text">제정기관이 육군인 활성 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-          <button class="prompt-card" type="button" role="listitem" data-q="방탄복 관련 최신 규격"><span class="prompt-card-text">방탄복 관련 최신 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="prompt-card" type="button" role="listitem" data-q="소총(M16) 관련 규격" data-direct-params='{"적용장비명":"소총(M16)"}'><span class="prompt-card-text">소총(M16) 관련 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         <div class="welcome-footnote">데이터는 저장하지 않으며 매 요청마다 KDSIS를 실시간 조회합니다.</div>
       </div>
@@ -757,7 +798,7 @@
   <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
   <aside class="sidebar" id="sidebar" role="dialog" aria-modal="true" aria-labelledby="sbBrandTitle" hidden>
     <div class="sb-head">
-      <div class="sb-mark" aria-hidden="true">K</div>
+      <button class="sb-mark" id="sbHomeBtn" type="button" aria-label="홈으로 이동" title="홈으로">K</button>
       <div class="sb-brand">
         <div class="sb-brand-title" id="sbBrandTitle">국방 AI</div>
         <div class="sb-brand-sub">KDSIS 실시간 검색</div>
@@ -796,11 +837,19 @@
         <div class="sb-foot-name">익명 사용자</div>
         <div class="sb-foot-ver">v0.9.2 · 베타</div>
       </div>
-      <button class="sb-fb-btn" type="button" id="sbFeedbackBtn" aria-label="개발자에게 한마디" title="개발자에게 한마디">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="M3 4h10v6H7l-3 3v-3H3V4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-        </svg>
-      </button>
+      <div class="sb-foot-actions">
+        <button class="sb-fb-btn" type="button" id="sbFeedbackSummaryBtn" aria-label="별점 모아보기" title="별점 모아보기">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M3 12V7M8 12V4M13 12V9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <path d="M2 12.5h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="sb-fb-btn" type="button" id="sbFeedbackBtn" aria-label="개발자에게 한마디" title="개발자에게 한마디">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M3 4h10v6H7l-3 3v-3H3V4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
     </div>
   </aside>
 
@@ -842,6 +891,24 @@
             <button type="submit" class="fb-btn fb-btn-submit" id="fbSubmitBtn" disabled>피드백 보내기</button>
           </div>
         </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Feedback summary modal -->
+  <div class="modal" id="feedbackSummaryModal" role="dialog" aria-modal="true" aria-labelledby="fbSummaryTitle" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-panel" role="document">
+      <header class="modal-head">
+        <h2 id="fbSummaryTitle">익명 리뷰</h2>
+        <button class="icon-btn" type="button" data-modal-close aria-label="닫기" title="닫기">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="fb-summary-top">
+          <p class="fb-summary-copy">익명 사용자들이 남긴 별점과 한마디입니다. 개인정보는 표시하지 않습니다.</p>
+          <button class="fb-refresh" id="fbSummaryLoadBtn" type="button">새로고침</button>
+        </div>
+        <div id="fbSummaryContent" class="fb-empty-panel">익명 리뷰를 불러오는 중입니다.</div>
       </div>
     </div>
   </div>
@@ -924,7 +991,6 @@
           <dt><kbd>Shift</kbd> + <kbd>Enter</kbd></dt><dd>줄바꿈</dd>
           <dt><kbd>Ctrl</kbd> + <kbd>K</kbd></dt><dd>새 대화 시작 (대화 기록 삭제)</dd>
           <dt><kbd>Shift</kbd> + <kbd>D</kbd></dt><dd>라이트 ↔ 다크 모드 전환</dd>
-          <dt><kbd>Shift</kbd> + <kbd>S</kbd></dt><dd>공유 링크 복사</dd>
           <dt><kbd>?</kbd></dt><dd>이 도움말 열기</dd>
           <dt><kbd>Esc</kbd></dt><dd>도움말 닫기</dd>
           <dt><kbd>/</kbd></dt><dd>입력창 포커스</dd>
@@ -1077,60 +1143,6 @@ function startKdsisWaitFeedback({ panel, button, buttonText, spec } = {}) {
     clearInterval(timer);
     if (button) button.title = originalTitle;
   };
-}
-
-// ── Shareable URL ──
-// Encodes the latest search into location.hash so the link can be shared.
-// Shape:
-//   #q=<natural language>                    (kind=query)
-//   #p.<field>=<value>&p.<field2>=<value2>&label=<display>   (kind=direct)
-function searchToHash(search) {
-  if (!search) return "";
-  const sp = new URLSearchParams();
-  if (search.kind === "query") {
-    sp.set("q", search.text || "");
-  } else if (search.kind === "direct") {
-    if (search.label) sp.set("label", search.label);
-    for (const [k, v] of Object.entries(search.params || {})) {
-      if (v != null && String(v).trim()) sp.set("p." + k, String(v));
-    }
-  }
-  return sp.toString();
-}
-function hashToSearch(hash) {
-  const raw = String(hash || "").replace(/^#/, "");
-  if (!raw) return null;
-  let sp;
-  try { sp = new URLSearchParams(raw); } catch { return null; }
-  if (sp.has("q")) return { kind: "query", text: sp.get("q") };
-  const params = {};
-  for (const [k, v] of sp.entries()) {
-    if (k.startsWith("p.")) params[k.slice(2)] = v;
-  }
-  if (Object.keys(params).length > 0) {
-    return { kind: "direct", params, label: sp.get("label") || Object.values(params).join(" ") };
-  }
-  return null;
-}
-function updateShareHash(search) {
-  const hash = searchToHash(search);
-  if (!hash) return;
-  // Use replaceState so repeat searches don't pollute back-history, but
-  // the first one from a fresh page still pushes so Back returns to blank.
-  const newUrl = location.pathname + location.search + "#" + hash;
-  if (location.hash) history.replaceState(null, "", newUrl);
-  else history.pushState(null, "", newUrl);
-}
-async function copyShareLink() {
-  if (!lastSearch) {
-    toast("공유할 검색이 없습니다", "info");
-    return;
-  }
-  updateShareHash(lastSearch);
-  const fullUrl = location.href;
-  const ok = await copyText(fullUrl);
-  if (ok) toast("공유 링크를 복사했습니다", "success");
-  else toast("링크 복사에 실패했습니다", "error");
 }
 
 // ── CSV export ──
@@ -1442,12 +1454,9 @@ function resetChat() {
   lastSearch = null;
   closeDetailModal();
   setChatHeading("새 대화", "방금 시작 · KDSIS 실시간 연결됨", "KDSIS 실시간 검색");
-  // Drop the share hash too — we're on a clean slate
-  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   input.focus();
 }
 resetBtn.addEventListener("click", resetChat);
-document.getElementById("shareBtn").addEventListener("click", copyShareLink);
 
 // ── Help modal ──
 const helpModal = document.getElementById("helpModal");
@@ -1507,11 +1516,6 @@ document.addEventListener("keydown", (e) => {
   if (e.shiftKey && e.key === "D") {
     e.preventDefault();
     applyTheme(currentTheme() === "dark" ? "light" : "dark", true);
-    return;
-  }
-  if (e.shiftKey && e.key === "S") {
-    e.preventDefault();
-    copyShareLink();
     return;
   }
   if (e.key === "?" || (e.shiftKey && e.key === "/")) {
@@ -1668,7 +1672,6 @@ async function runDirectSearch(params, displayText) {
   busy = true;
   lastSearch = { kind: "direct", params, label: displayText };
   setChatHeading(clampTitle(displayText), "KDSIS 그리드를 파싱 중입니다", "검색 중…");
-  updateShareHash(lastSearch);
   rememberRecent(displayText);
   hideRecent();
   welcome.style.display = "none";
@@ -1710,7 +1713,7 @@ async function runDirectSearch(params, displayText) {
     removeTyping(typingId);
     if (data.type === "success" && data.rows?.length > 0) addResultMessage(data);
     else if (data.type === "error") addBotMessage(errorBlockHTML(data.message, data.detail || data.stack) + retryButtonHTML());
-    else addBotMessage(emptyStateHTML(displayText) + retryButtonHTML());
+    else addBotMessage(emptyStateHTML(displayText) + verificationHTML(data.verification) + retryButtonHTML());
   } catch (err) {
     removeTyping(typingId);
     addBotMessage(errorBlockHTML(`네트워크 에러: ${err.message}`, err.stack || "") + retryButtonHTML());
@@ -1728,7 +1731,6 @@ async function sendBatch(queries) {
   busy = true;
   lastSearch = { kind: "batch", queries };
   setChatHeading(`${queries.length}개 일괄 검색`, "KDSIS 그리드를 순차 조회 중입니다", "일괄 검색 중…");
-  updateShareHash(lastSearch);
   queries.forEach((q) => rememberRecent(q));
   hideRecent();
   welcome.style.display = "none";
@@ -1839,7 +1841,7 @@ function handleBatchEvent(ev, queries) {
     if (ev.rows && ev.rows.length > 0) {
       addResultMessage({ ...ev, __batchHeader: headerHtml });
     } else {
-      addBotMessage(headerHtml + emptyStateHTML(qText));
+      addBotMessage(headerHtml + emptyStateHTML(qText) + verificationHTML(ev.verification));
     }
   } else {
     addBotMessage(
@@ -1857,7 +1859,6 @@ async function sendQuery(text) {
   busy = true;
   lastSearch = { kind: "query", text };
   setChatHeading(clampTitle(text), "KDSIS 그리드를 파싱 중입니다", "검색 중…");
-  updateShareHash(lastSearch);
   rememberRecent(text);
   hideRecent();
   welcome.style.display = "none";
@@ -1912,7 +1913,7 @@ async function sendQuery(text) {
     } else if (data.type === "error") {
       addBotMessage(errorBlockHTML(data.message, data.detail || data.stack) + retryButtonHTML());
     } else {
-      addBotMessage(emptyStateHTML(text) + retryButtonHTML());
+      addBotMessage(emptyStateHTML(text) + verificationHTML(data.verification) + retryButtonHTML());
     }
   } catch (err) {
     removeTyping(typingId);
@@ -2110,6 +2111,31 @@ function renderTableHtml(data, rows, terms, sort) {
 }
 
 // Sortable card-view columns (subset — only columns that make sense)
+function verificationHTML(verification) {
+  if (!verification || typeof verification !== "object") return "";
+  const status = String(verification.status || "warn").toLowerCase();
+  const safeStatus = ["pass", "warn", "fail", "empty"].includes(status) ? status : "warn";
+  const method = verification.method === "ai" ? "AI" : "규칙";
+  const labelMap = method === "AI"
+    ? { pass: "AI 검증 통과", warn: "AI 확인 필요", fail: "AI 불일치 의심", empty: "AI 결과 없음" }
+    : { pass: "검증 통과", warn: "확인 필요", fail: "불일치 의심", empty: "결과 없음" };
+  const checked = Number(verification.checkedCount || 0);
+  const confidence = Number.isFinite(Number(verification.confidence))
+    ? `${Math.round(Number(verification.confidence) * 100)}%`
+    : "-";
+  const summary = verification.summary || "검색 결과 검증을 완료했습니다.";
+  const warnText = Array.isArray(verification.warnings) && verification.warnings.length > 0
+    ? ` · ${verification.warnings.slice(0, 2).map(esc).join(" · ")}`
+    : "";
+  return `<div class="verification verification--${safeStatus}" role="status" aria-live="polite">
+    <span class="verification-badge">${esc(labelMap[safeStatus])}</span>
+    <span class="verification-main">
+      <span class="verification-summary">${esc(summary)}</span>
+      <span class="verification-meta">${esc(method)} · ${checked}행 샘플 · 신뢰도 ${esc(confidence)}${warnText}</span>
+    </span>
+  </div>`;
+}
+
 const CARD_SORT_COLUMNS = [
   { value: "", label: "원본 순서" },
   { value: "규격번호", label: "규격번호" },
@@ -2144,6 +2170,8 @@ function addResultMessage(data) {
   }
 
   // 검색 파라미터 태그
+  html += verificationHTML(data.verification);
+
   if (data.searchParams && Object.keys(data.searchParams).length > 0) {
     html += '<div class="search-params">';
     for (const [k, v] of Object.entries(data.searchParams)) {
@@ -3088,6 +3116,9 @@ const sbRecentList = document.getElementById("sbRecentList");
 const sbSearchInput = document.getElementById("sbSearchInput");
 const sbNewChatBtn = document.getElementById("sbNewChatBtn");
 const sbFeedbackBtn = document.getElementById("sbFeedbackBtn");
+const sbFeedbackSummaryBtn = document.getElementById("sbFeedbackSummaryBtn");
+const sbHomeBtn = document.getElementById("sbHomeBtn");
+const mobileHomeBtn = document.getElementById("mobileHomeBtn");
 
 function renderSidebarRecents(filter) {
   if (!sbRecentList) return;
@@ -3184,6 +3215,15 @@ if (sbNewChatBtn) sbNewChatBtn.addEventListener("click", () => {
   // Trigger the existing reset flow so all state stays consistent
   if (resetBtn) resetBtn.click();
 });
+function goHomeFromLogo() {
+  if (busy) return;
+  if (!isDesktopVP()) closeSidebar();
+  closeFeedbackSummaryModal();
+  closeFeedbackModal();
+  resetChat();
+}
+if (sbHomeBtn) sbHomeBtn.addEventListener("click", goHomeFromLogo);
+if (mobileHomeBtn) mobileHomeBtn.addEventListener("click", goHomeFromLogo);
 
 // ── Feedback modal (5-star + anonymous comment → POST /api/feedback) ──
 const feedbackModal = document.getElementById("feedbackModal");
@@ -3193,6 +3233,9 @@ const fbCommentEl = document.getElementById("fbComment");
 const fbCounterNow = document.getElementById("fbCounterNow");
 const fbSubmitBtn = document.getElementById("fbSubmitBtn");
 const feedbackForm = document.getElementById("feedbackForm");
+const feedbackSummaryModal = document.getElementById("feedbackSummaryModal");
+const fbSummaryContent = document.getElementById("fbSummaryContent");
+const fbSummaryLoadBtn = document.getElementById("fbSummaryLoadBtn");
 let fbRating = 0;
 const FB_LABELS = ["미평가", "매우 불만족", "불만족", "보통", "만족", "매우 만족"];
 
@@ -3259,9 +3302,9 @@ function closeFeedbackModal() {
   feedbackModal.hidden = true;
 }
 if (sbFeedbackBtn) sbFeedbackBtn.addEventListener("click", () => {
-  closeSidebar();
-  // Wait for sidebar slide-out so focus order stays clean
-  setTimeout(openFeedbackModal, 280);
+  const delay = isDesktopVP() ? 0 : 280;
+  if (!isDesktopVP()) closeSidebar();
+  setTimeout(openFeedbackModal, delay);
 });
 if (feedbackModal) {
   feedbackModal.addEventListener("click", (e) => {
@@ -3299,10 +3342,101 @@ if (feedbackForm) {
   });
 }
 
+function closeFeedbackSummaryModal() {
+  if (!feedbackSummaryModal) return;
+  feedbackSummaryModal.hidden = true;
+}
+function openFeedbackSummaryModal() {
+  if (!feedbackSummaryModal) return;
+  feedbackSummaryModal.hidden = false;
+  setTimeout(() => {
+    if (fbSummaryLoadBtn) fbSummaryLoadBtn.focus();
+  }, 30);
+  loadFeedbackSummary();
+}
+function _feedbackTime(ts) {
+  const d = new Date(ts);
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleString("ko-KR", { month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+}
+function renderFeedbackSummary(data) {
+  if (!fbSummaryContent) return;
+  const stats = data && data.stats || {};
+  const dist = stats.distribution || {};
+  const count = Number(stats.count || 0);
+  const avg = Number(stats.avg || 0);
+  const max = Math.max(1, ...[1,2,3,4,5].map(n => Number(dist[n] || 0)));
+  const distHtml = [5,4,3,2,1].map(n => {
+    const value = Number(dist[n] || 0);
+    const pct = Math.round((value / max) * 100);
+    return `<div class="fb-dist-row">
+      <div>${n}점</div>
+      <div class="fb-dist-bar"><div class="fb-dist-fill" style="width:${pct}%"></div></div>
+      <div>${value}</div>
+    </div>`;
+  }).join("");
+  const items = Array.isArray(data && data.items) ? data.items : [];
+  const listHtml = items.length ? items.map(item => {
+    const rating = Math.max(1, Math.min(5, parseInt(item.rating, 10) || 0));
+    const comment = String(item.comment || "").trim();
+    return `<article class="fb-list-item">
+      <div class="fb-list-head">
+        <span class="fb-list-rating">${rating}점 · ${esc(FB_LABELS[rating] || "")}</span>
+        <span class="fb-list-time">${esc(_feedbackTime(item.ts))}</span>
+      </div>
+      <div class="fb-list-comment">${comment ? esc(comment) : '<span style="color:var(--text-tertiary)">별점만 남겼습니다.</span>'}</div>
+    </article>`;
+  }).join("") : `<div class="fb-empty-panel">아직 받은 별점이 없습니다.</div>`;
+  fbSummaryContent.className = "";
+  fbSummaryContent.innerHTML = `
+    <div class="fb-summary-grid">
+      <div class="fb-stat"><div class="fb-stat-label">전체</div><div class="fb-stat-value">${count}</div></div>
+      <div class="fb-stat"><div class="fb-stat-label">평균</div><div class="fb-stat-value">${avg ? avg.toFixed(1) : "0.0"}</div></div>
+      <div class="fb-stat"><div class="fb-stat-label">최근</div><div class="fb-stat-value">${items.length}</div></div>
+    </div>
+    <div class="fb-dist">${distHtml}</div>
+    <div class="fb-list">${listHtml}</div>`;
+}
+async function loadFeedbackSummary() {
+  if (!fbSummaryContent || !fbSummaryLoadBtn) return;
+  const original = fbSummaryLoadBtn.textContent;
+  fbSummaryLoadBtn.disabled = true;
+  fbSummaryLoadBtn.textContent = "불러오는 중…";
+  fbSummaryContent.className = "fb-empty-panel";
+  fbSummaryContent.textContent = "익명 리뷰를 불러오는 중입니다.";
+  try {
+    const res = await fetch("/api/feedback/public?limit=100");
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    renderFeedbackSummary(data);
+  } catch (err) {
+    fbSummaryContent.className = "fb-empty-panel";
+    fbSummaryContent.textContent = err.message || String(err);
+  } finally {
+    fbSummaryLoadBtn.disabled = false;
+    fbSummaryLoadBtn.textContent = original || "새로고침";
+  }
+}
+if (fbSummaryLoadBtn) fbSummaryLoadBtn.addEventListener("click", loadFeedbackSummary);
+if (sbFeedbackSummaryBtn) sbFeedbackSummaryBtn.addEventListener("click", () => {
+  const delay = isDesktopVP() ? 0 : 280;
+  if (!isDesktopVP()) closeSidebar();
+  setTimeout(openFeedbackSummaryModal, delay);
+});
+if (feedbackSummaryModal) {
+  feedbackSummaryModal.addEventListener("click", (e) => {
+    if (e.target.matches("[data-modal-close]")) closeFeedbackSummaryModal();
+  });
+}
+
 // Esc closes sidebar (in addition to existing modal close handlers)
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (sidebarEl && !sidebarEl.hidden && !isDesktopVP()) { closeSidebar(); }
+  if (feedbackSummaryModal && !feedbackSummaryModal.hidden) closeFeedbackSummaryModal();
+  if (feedbackModal && !feedbackModal.hidden) closeFeedbackModal();
 });
 
 // ── Detail modal — large centered popup for a row ──────────────────────
@@ -3554,32 +3688,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && detailModal && !detailModal.hidden) closeDetailModal();
 });
 
-// If the page loaded with a share hash, run that search instead of
-// restoring the stale session. This is what makes shared links work.
-function runHashSearchOrRestore() {
-  const fromHash = hashToSearch(location.hash);
-  if (fromHash) {
-    // A fresh hash-driven load clears the local session so the
-    // shared link becomes the new canonical state
-    clearSession();
-    if (fromHash.kind === "query") sendQuery(fromHash.text);
-    else runDirectSearch(fromHash.params, fromHash.label);
-    return;
-  }
-  restoreSession();
-}
-runHashSearchOrRestore();
-
-// Back/forward buttons: navigate between share hashes without a reload
-window.addEventListener("popstate", () => {
-  const next = hashToSearch(location.hash);
-  if (!next || busy) return;
-  // Reset chat and run the hash search; the user's intent is "go back to
-  // that shared view", not "keep stacking on top of the current one"
-  resetChat();
-  if (next.kind === "query") sendQuery(next.text);
-  else runDirectSearch(next.params, next.label);
-});
+restoreSession();
 </script>
 </body>
 </html>
