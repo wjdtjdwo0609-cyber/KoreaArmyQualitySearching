@@ -9,16 +9,24 @@
   <link rel="stylesheet" as="style" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
   <link rel="stylesheet" as="style" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
   <script>
-    // No-flash theme init: apply BEFORE first paint
+    // No-flash theme + sidebar collapse init: apply BEFORE first paint
     (function () {
+      var root = document.documentElement;
       try {
         var stored = localStorage.getItem("kdsis-theme");
         var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
         var theme = stored || (prefersDark ? "dark" : "light");
-        document.documentElement.setAttribute("data-theme", theme);
+        root.setAttribute("data-theme", theme);
       } catch (e) {
-        document.documentElement.setAttribute("data-theme", "light");
+        root.setAttribute("data-theme", "light");
       }
+      try {
+        // Default to collapsed on desktop ("more reading room") unless the
+        // user explicitly expanded before. Mobile is unaffected — the sidebar
+        // is a slide-in sheet there.
+        var sb = localStorage.getItem("kdsis-sb-collapsed");
+        if (sb === "1" || sb === null) root.classList.add("sb-collapsed");
+      } catch (e) {}
     })();
   </script>
   <style>
@@ -497,6 +505,93 @@
 
     /* Header hamburger */
     .icon-btn.hamburger{order:99}
+
+    /* ── Desktop dock (≥ 1024px) ───────────────────────────────
+       모바일: 우측에서 슬라이드 인하는 시트.
+       데스크톱: 좌측에 고정된 collapsible 사이드바. 햄버거 버튼이 폭을
+       토글한다. 디테일은 우측 패널이 아니라 화면 중앙 큰 모달로 노출 —
+       작은 우측 패널보다 가독성·복사 편의가 우월하다는 사용자 결정. */
+    @media (min-width: 1024px) {
+      .sidebar-backdrop{display:none !important}
+      .sidebar{position:fixed;top:0;left:0;right:auto;bottom:0;width:280px;
+        transform:none !important;transition:width .22s ease,padding .22s ease;
+        box-shadow:none;border-left:none;border-right:1px solid var(--divider)}
+      .sidebar[hidden]{display:flex !important}
+      .sidebar.collapsed{width:56px}
+      .sidebar.collapsed .sb-brand,
+      .sidebar.collapsed .sb-online,
+      .sidebar.collapsed .sb-search-wrap,
+      .sidebar.collapsed .sb-listhead,
+      .sidebar.collapsed .sb-item-meta,
+      .sidebar.collapsed .sb-item-title,
+      .sidebar.collapsed .sb-empty,
+      .sidebar.collapsed .sb-saved-row span,
+      .sidebar.collapsed .sb-foot-meta,
+      .sidebar.collapsed .sb-newchat span,
+      .sidebar.collapsed #sidebarCloseBtn{display:none}
+      .sidebar.collapsed .sb-head{padding:14px 6px 12px;justify-content:center;gap:0}
+      .sidebar.collapsed .sb-section,
+      .sidebar.collapsed .sb-search-wrap,
+      .sidebar.collapsed .sb-list{padding-left:6px;padding-right:6px}
+      .sidebar.collapsed .sb-newchat{padding:8px 0;gap:0;justify-content:center}
+      .sidebar.collapsed .sb-item{padding:8px 6px;text-align:center}
+      .sidebar.collapsed .sb-foot{padding:10px 6px;justify-content:center;gap:0}
+      .app{padding-left:280px;transition:padding-left .22s ease}
+      html.sb-collapsed .app{padding-left:56px}
+      /* 햄버거 버튼은 데스크톱에서 collapse 토글 — 시각적 hint로 회전 */
+      .icon-btn.hamburger svg{transition:transform .22s ease}
+      html.sb-collapsed .icon-btn.hamburger svg{transform:rotate(90deg)}
+      /* 입력 영역도 사이드바 폭만큼 안쪽 정렬되도록 */
+      .input-area{max-width:calc(900px + 4rem)}
+    }
+
+    /* ── Detail modal (큰 모달, 시안 Screen 5) ──────────────────
+       카드 본체 클릭 시 화면 중앙에 큰 모달로 펼침. 우측 좁은 패널보다
+       복사·읽기·다운로드가 모두 한 화면에 정리된다. */
+    .modal-panel.detail-panel{max-width:720px}
+    .dm-head{display:flex;flex-direction:column;gap:.5rem;padding:1.125rem 1.25rem 1rem;border-bottom:1px solid var(--divider);background:var(--surface);border-top-left-radius:var(--r-lg);border-top-right-radius:var(--r-lg)}
+    .dm-headrow{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+    .dm-spec-no{font-family:var(--mono);font-size:.8125rem;font-weight:500;color:var(--primary-soft-text);background:var(--primary-soft);padding:3px 9px;border-radius:var(--r-sm);letter-spacing:.02em;user-select:text}
+    .dm-title{font-family:var(--font);font-size:1.25rem;font-weight:600;color:var(--text);letter-spacing:-.01em;line-height:1.3;user-select:text}
+    .dm-actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.25rem}
+    .dm-action{display:inline-flex;align-items:center;gap:.25rem;padding:.375rem .625rem;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--surface);color:var(--muted);font-family:var(--font);font-size:.75rem;font-weight:500;letter-spacing:-.01em;cursor:pointer;transition:background-color .12s,color .12s,border-color .12s}
+    .dm-action:hover{color:var(--text);border-color:var(--border-strong);background:var(--surface-hover)}
+    .dm-action.copied{color:var(--primary-soft-text);background:var(--primary-soft);border-color:var(--primary-soft)}
+    .dm-action.primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+    .dm-action.primary:hover{background:var(--primary-light);color:#fff}
+    .dm-section{padding:1rem 1rem 0}
+    .dm-section + .dm-section{padding-top:1rem}
+    .dm-section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;padding-left:.25rem}
+    .dm-section-label{font-family:var(--font);font-size:.75rem;font-weight:500;color:var(--muted);letter-spacing:-.01em}
+    .dm-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden}
+    .dm-field{display:flex;align-items:flex-start;gap:.625rem;padding:.625rem .875rem;border-bottom:1px solid var(--divider)}
+    .dm-field:last-child{border-bottom:none}
+    .dm-field-label{width:104px;flex-shrink:0;font-family:var(--font);font-size:.75rem;color:var(--muted);font-weight:500;letter-spacing:-.01em;padding-top:2px}
+    .dm-field-value{flex:1;font-family:var(--font);font-size:.84375rem;color:var(--text);letter-spacing:-.01em;line-height:1.5;user-select:text;word-break:break-word}
+    .dm-field-value.mono{font-family:var(--mono);letter-spacing:.02em;font-weight:500}
+    .dm-field-copy{flex-shrink:0}
+    .dm-foot{padding:.625rem 1rem 1rem;border-top:1px solid var(--divider);background:var(--surface);display:flex;align-items:flex-start;gap:.5rem;font-family:var(--font);font-size:.6875rem;color:var(--text-tertiary);letter-spacing:-.01em;line-height:1.5;border-bottom-left-radius:var(--r-lg);border-bottom-right-radius:var(--r-lg)}
+    .dm-foot svg{flex-shrink:0;margin-top:1px;color:var(--text-tertiary)}
+    .dm-attach-empty{padding:.875rem;text-align:center;color:var(--muted);font-size:.8125rem}
+    .dm-attach-list{display:flex;flex-direction:column}
+    .dm-attach-item{display:flex;align-items:center;gap:.75rem;padding:.625rem .875rem;border-bottom:1px solid var(--divider);background:var(--surface)}
+    .dm-attach-item:last-child{border-bottom:none}
+    .dm-attach-icon{width:36px;height:36px;border-radius:var(--r-sm);background:var(--surface-alt);color:var(--muted);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:var(--font);font-size:.625rem;font-weight:600;letter-spacing:.04em;flex-shrink:0}
+    .dm-attach-meta{flex:1;min-width:0}
+    .dm-attach-name{font-family:var(--font);font-size:.84375rem;font-weight:500;color:var(--text);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .dm-attach-sub{font-family:var(--font);font-size:.75rem;color:var(--muted);margin-top:2px;letter-spacing:-.01em}
+    .dm-attach-dl{flex-shrink:0;width:32px;height:32px;border-radius:var(--r-sm);background:var(--surface);border:1px solid var(--border-strong);color:var(--muted);display:flex;align-items:center;justify-content:center;cursor:pointer;text-decoration:none}
+    .dm-attach-dl:hover{color:var(--primary);border-color:var(--primary-light)}
+    .dm-loading{padding:.875rem;text-align:center;color:var(--muted);font-size:.8125rem}
+    .dm-error{padding:.625rem .875rem;color:var(--error);font-size:.8125rem;background:var(--error-tint);border:1px solid var(--error-border);border-radius:var(--r-sm);margin:.5rem .25rem}
+    /* 카드 본체 클릭 가능 hint */
+    .card.clickable{cursor:pointer}
+    .card.clickable .card-meta{margin-bottom:.25rem}
+    .card-tap-hint{margin-top:.5rem;padding-top:.625rem;border-top:1px solid var(--divider);display:flex;align-items:center;justify-content:space-between;gap:.5rem;font-family:var(--font);font-size:.75rem;color:var(--primary-soft-text);font-weight:500;letter-spacing:-.01em}
+    .card-tap-hint .ct-chev{transition:transform .12s,color .12s}
+    .card.clickable:hover .ct-chev{transform:translateX(2px)}
+    /* attach-block 다음에 오는 tap-hint 는 시각적 분리가 이미 있어 border 제거 */
+    .attach-block + .card-tap-hint{border-top:none;padding-top:.25rem}
   </style>
 </head>
 <body>
@@ -653,6 +748,66 @@
             <button type="submit" class="fb-btn fb-btn-submit" id="fbSubmitBtn" disabled>피드백 보내기</button>
           </div>
         </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail modal — full info popup (시안 Screen 5) -->
+  <div class="modal" id="detailModal" role="dialog" aria-modal="true" aria-labelledby="dmTitle" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-panel detail-panel" role="document">
+      <header class="dm-head">
+        <div class="dm-headrow">
+          <span class="dm-spec-no" id="dmSpecNo"></span>
+          <span class="dm-status" id="dmStatus"></span>
+          <div style="flex:1"></div>
+          <button class="icon-btn" type="button" data-modal-close aria-label="닫기" title="닫기">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <h2 class="dm-title" id="dmTitle"></h2>
+        <div class="dm-actions">
+          <button type="button" class="dm-action primary" id="dmCopyAll">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><rect x="3.5" y="1" width="7.5" height="9" rx="1.2" stroke="currentColor" stroke-width="1.2" fill="none"/><rect x="1" y="2.5" width="7.5" height="9" rx="1.2" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+            <span>전체 복사</span>
+          </button>
+          <button type="button" class="dm-action" id="dmCopyJson">
+            <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6l3 3 5-7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+            <span>JSON</span>
+          </button>
+          <button type="button" class="dm-action" id="dmOpenKdsis">
+            <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M5 2H3a1 1 0 00-1 1v6a1 1 0 001 1h6a1 1 0 001-1V7M7 2h3v3M5 7l5-5" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>KDSIS에서 열기</span>
+          </button>
+        </div>
+      </header>
+      <div class="modal-body" style="padding:0">
+        <section class="dm-section">
+          <div class="dm-section-head">
+            <div class="dm-section-label">기본 정보</div>
+          </div>
+          <div class="dm-card" id="dmBasic"></div>
+        </section>
+        <section class="dm-section">
+          <div class="dm-section-head">
+            <div class="dm-section-label">전체 필드</div>
+          </div>
+          <div class="dm-card" id="dmAllFields"></div>
+        </section>
+        <section class="dm-section" style="padding-bottom:1rem">
+          <div class="dm-section-head">
+            <div class="dm-section-label">첨부파일</div>
+          </div>
+          <div class="dm-card" id="dmAttach">
+            <div class="dm-loading">첨부파일을 불러오는 중…</div>
+          </div>
+        </section>
+      </div>
+      <div class="dm-foot">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M6 1.5L7.4 4.4 10.5 4.9 8.3 7l.5 3.1L6 8.7l-2.8 1.4.5-3.1L1.5 4.9l3.1-.5L6 1.5z" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linejoin="round"/>
+        </svg>
+        <span>텍스트를 드래그하면 원하는 부분만 선택·복사할 수 있습니다.</span>
       </div>
     </div>
   </div>
@@ -1675,7 +1830,12 @@ function renderCardsHtml(data, rows, terms) {
     const revDate = row["최종개정일자"] || "";
     const orgHierarchy = mergeOrgHierarchy(row);
 
-    html += '<div class="card">';
+    // 카드 본체 자체가 모달 트리거 — 작은 우측 패널보다 큰 모달이 가독성·복사
+    // 모두 우월하다는 사용자 결정. 인터랙티브 자식 (button/summary/a/.attach-block)은
+    // messages click delegate 가 알아서 거른다.
+    const rowJson = JSON.stringify(row).replace(/"/g, "&quot;");
+    const sp = data.searchParams ? JSON.stringify(data.searchParams).replace(/"/g, "&quot;") : "{}";
+    html += `<div class="card clickable" data-row-json="${rowJson}" data-search-params="${sp}" tabindex="0" role="button" aria-label="${esc(specNo || title)} 상세 정보 보기">`;
     html += '<div class="card-head">';
     if (specNo) html += `<button type="button" class="spec-no copyable" data-copy="${esc(specNo)}" title="규격번호 복사" aria-label="규격번호 ${esc(specNo)} 복사">${esc(specNo)}</button>`;
     if (specKind) html += `<span class="spec-kind">${esc(specKind)}</span>`;
@@ -1723,6 +1883,8 @@ function renderCardsHtml(data, rows, terms) {
       html += `</div>`;
     }
 
+    // 카드 본체가 클릭 가능함을 사용자에게 알려주는 hint
+    html += `<div class="card-tap-hint" aria-hidden="true">상세 정보 보기 <svg class="ct-chev" width="6" height="10" viewBox="0 0 6 10"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>`;
     html += "</div>";
   });
   return html;
@@ -2746,7 +2908,44 @@ function closeSidebar() {
     sidebarBackdrop.hidden = true;
   }, 260);
 }
-if (menuBtn) menuBtn.addEventListener("click", openSidebar);
+// Desktop dock vs mobile slide — the hamburger flips between collapse-toggle
+// and slide-open depending on viewport width. matchMedia keeps it reactive
+// when the user resizes between modes.
+const mqDesktop = window.matchMedia("(min-width: 1024px)");
+const isDesktopVP = () => mqDesktop.matches;
+function applySidebarMode() {
+  if (!sidebarEl) return;
+  if (isDesktopVP()) {
+    // Always mounted on desktop; visibility is controlled by .collapsed.
+    sidebarEl.hidden = false;
+    sidebarEl.classList.remove("open"); // mobile-only state
+    if (sidebarBackdrop) sidebarBackdrop.hidden = true;
+    sidebarEl.classList.toggle("collapsed",
+      document.documentElement.classList.contains("sb-collapsed"));
+    renderSidebarRecents(sbSearchInput && sbSearchInput.value);
+  } else {
+    // Mobile: collapse class is meaningless here.
+    sidebarEl.classList.remove("collapsed");
+    if (!sidebarEl.classList.contains("open")) {
+      sidebarEl.hidden = true;
+      if (sidebarBackdrop) sidebarBackdrop.hidden = true;
+    }
+  }
+}
+if (mqDesktop.addEventListener) mqDesktop.addEventListener("change", applySidebarMode);
+else if (mqDesktop.addListener) mqDesktop.addListener(applySidebarMode);
+applySidebarMode();
+
+if (menuBtn) menuBtn.addEventListener("click", () => {
+  if (isDesktopVP()) {
+    const isCollapsed = sidebarEl.classList.toggle("collapsed");
+    document.documentElement.classList.toggle("sb-collapsed", isCollapsed);
+    try { localStorage.setItem("kdsis-sb-collapsed", isCollapsed ? "1" : "0"); } catch (e) {}
+    if (menuBtn) menuBtn.setAttribute("aria-expanded", String(!isCollapsed));
+  } else {
+    openSidebar();
+  }
+});
 if (sidebarCloseBtn) sidebarCloseBtn.addEventListener("click", closeSidebar);
 if (sidebarBackdrop) sidebarBackdrop.addEventListener("click", closeSidebar);
 if (sbSearchInput) sbSearchInput.addEventListener("input", () => renderSidebarRecents(sbSearchInput.value));
@@ -2873,7 +3072,214 @@ if (feedbackForm) {
 // Esc closes sidebar (in addition to existing modal close handlers)
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (sidebarEl && !sidebarEl.hidden) { closeSidebar(); }
+  if (sidebarEl && !sidebarEl.hidden && !isDesktopVP()) { closeSidebar(); }
+});
+
+// ── Detail modal — large centered popup for a row ──────────────────────
+// 우측 좁은 패널 대신 화면 중앙 큰 모달로 노출. 카드 본체 click → 모달 open.
+// 인터랙티브 자식 (spec-no 복사 버튼, attach-load-btn, KDSIS 외부 링크,
+// summary, anchor) 클릭 시에는 모달이 안 열리도록 closest(...) 로 거른다.
+const detailModal = document.getElementById("detailModal");
+const dmSpecNo = document.getElementById("dmSpecNo");
+const dmStatus = document.getElementById("dmStatus");
+const dmTitle = document.getElementById("dmTitle");
+const dmBasic = document.getElementById("dmBasic");
+const dmAllFields = document.getElementById("dmAllFields");
+const dmAttach = document.getElementById("dmAttach");
+const PRIMARY_FIELD_LIST = ["규격번호","규격종류","규격서명","상태","제정기관","적용장비명","재고번호(NSN)","부품관리번호","제정일자","최종개정일자"];
+let _dmCurrent = null;
+
+function _humanFileSize(bytes) {
+  if (typeof bytes !== "number" || !isFinite(bytes) || bytes <= 0) return "";
+  const u = ["B","KB","MB","GB"];
+  let v = bytes, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${u[i]}`;
+}
+function _isMonoLabel(label) {
+  return /번호|일자|NSN|코드|차수|ICS/.test(label);
+}
+function _fieldRowHtml(label, value) {
+  const safeLabel = esc(String(label));
+  const safeValue = esc(String(value || ""));
+  const cls = "dm-field-value" + (_isMonoLabel(label) ? " mono" : "");
+  return `<div class="dm-field">
+    <div class="dm-field-label">${safeLabel}</div>
+    <div class="${cls}">${safeValue}</div>
+    <button type="button" class="dm-action dm-field-copy" data-copy-label="${safeLabel}" data-copy-value="${safeValue}" style="padding:3px 7px;font-size:.6875rem">복사</button>
+  </div>`;
+}
+
+function openDetailModal(row, searchParams) {
+  if (!detailModal || !row) return;
+  _dmCurrent = { row, searchParams: searchParams || {} };
+  const specNo = row["규격번호"] || "";
+  const title = row["규격서명"] || row["품명"] || "(제목 없음)";
+  const status = row["상태"] || "";
+  if (dmSpecNo) dmSpecNo.textContent = specNo || "—";
+  if (dmStatus) dmStatus.innerHTML = status
+    ? `<span class="status-badge ${statusClass(status)}">${esc(status)}</span>` : "";
+  if (dmTitle) dmTitle.textContent = title;
+
+  // 기본 정보 — PRIMARY_FIELD_LIST 순서 보존
+  let basicHtml = "";
+  PRIMARY_FIELD_LIST.forEach(k => {
+    const v = row[k];
+    if (typeof isEmpty === "function" ? isEmpty(v) : !v) return;
+    basicHtml += _fieldRowHtml(k, v);
+  });
+  if (dmBasic) dmBasic.innerHTML = basicHtml || `<div class="dm-attach-empty">표시할 정보가 없습니다</div>`;
+
+  // 전체 필드 — PRIMARY 제외, 빈 값 제외, 원본 컬럼 순서 유지
+  let allHtml = "";
+  Object.keys(row).forEach(k => {
+    if (PRIMARY_FIELD_LIST.indexOf(k) >= 0) return;
+    const v = row[k];
+    if (typeof isEmpty === "function" ? isEmpty(v) : !v) return;
+    allHtml += _fieldRowHtml(k, v);
+  });
+  if (dmAllFields) dmAllFields.innerHTML = allHtml || `<div class="dm-attach-empty">추가 필드 없음</div>`;
+
+  // 첨부 lazy load — 기존 /api/detail 캐시 공유
+  loadDetailModalAttachments(specNo, _dmCurrent.searchParams);
+
+  detailModal.hidden = false;
+  // Focus the close button so Esc/Enter behave naturally
+  setTimeout(() => {
+    const closeBtn = detailModal.querySelector("[data-modal-close]");
+    if (closeBtn) closeBtn.focus();
+  }, 30);
+}
+
+function closeDetailModal() {
+  if (!detailModal) return;
+  detailModal.hidden = true;
+  _dmCurrent = null;
+}
+
+async function loadDetailModalAttachments(specNo, params) {
+  if (!dmAttach) return;
+  if (!specNo) {
+    dmAttach.innerHTML = `<div class="dm-attach-empty">규격번호가 없어 첨부를 조회할 수 없습니다</div>`;
+    return;
+  }
+  dmAttach.innerHTML = `<div class="dm-loading">첨부파일을 불러오는 중…</div>`;
+  try {
+    const qs = `params=${encodeURIComponent(JSON.stringify(params || {}))}&key=${encodeURIComponent(specNo)}`;
+    const res = await fetch(`/api/detail?${qs}`);
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const d = await res.json(); if (d && d.error) msg = d.error; } catch (e) {}
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    const atts = (data && data.attachments) || [];
+    if (atts.length === 0) {
+      dmAttach.innerHTML = `<div class="dm-attach-empty">첨부파일이 없습니다</div>`;
+      return;
+    }
+    let html = '<div class="dm-attach-list">';
+    atts.forEach(a => {
+      const aqs = `params=${encodeURIComponent(JSON.stringify(params || {}))}&key=${encodeURIComponent(specNo)}&id=${encodeURIComponent(a.id || "")}`;
+      const sizeStr = (typeof a.size === "number" && a.size > 0)
+        ? _humanFileSize(a.size) : (a.sizeText || "스트리밍");
+      const ext = ((a.name || "").split(".").pop() || "FILE").toUpperCase().slice(0, 4);
+      html += `<div class="dm-attach-item">
+        <div class="dm-attach-icon">${esc(ext)}</div>
+        <div class="dm-attach-meta">
+          <div class="dm-attach-name">${esc(a.name || "(이름 없음)")}</div>
+          <div class="dm-attach-sub">${esc(sizeStr)}</div>
+        </div>
+        <a class="dm-attach-dl" href="/api/attachment?${aqs}" download aria-label="${esc(a.name || "")} 다운로드" title="다운로드">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M7 1v9M3 7l4 4 4-4M2 13h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </a>
+      </div>`;
+    });
+    html += `</div>`;
+    dmAttach.innerHTML = html;
+  } catch (err) {
+    dmAttach.innerHTML = `<div class="dm-error">첨부 조회 실패: ${esc(err && err.message || String(err))}</div>`;
+  }
+}
+
+if (detailModal) {
+  detailModal.addEventListener("click", (e) => {
+    if (e.target.closest("[data-modal-close]")) { closeDetailModal(); return; }
+    const copyBtn = e.target.closest(".dm-field-copy");
+    if (copyBtn) {
+      const k = copyBtn.dataset.copyLabel || "";
+      const v = copyBtn.dataset.copyValue || "";
+      try { navigator.clipboard && navigator.clipboard.writeText(`${k}: ${v}`); } catch (e) {}
+      copyBtn.classList.add("copied");
+      const orig = copyBtn.textContent;
+      copyBtn.textContent = "복사됨";
+      setTimeout(() => { copyBtn.classList.remove("copied"); copyBtn.textContent = orig || "복사"; }, 1400);
+      return;
+    }
+  });
+  const dmCopyAll = document.getElementById("dmCopyAll");
+  if (dmCopyAll) dmCopyAll.addEventListener("click", () => {
+    if (!_dmCurrent) return;
+    const lines = Object.entries(_dmCurrent.row)
+      .filter(([_, v]) => !(typeof isEmpty === "function" ? isEmpty(v) : !v))
+      .map(([k, v]) => `${k}: ${v}`)
+      .join("\n");
+    try { navigator.clipboard && navigator.clipboard.writeText(lines); } catch (e) {}
+    toast("전체 정보가 복사되었습니다", "success");
+  });
+  const dmCopyJson = document.getElementById("dmCopyJson");
+  if (dmCopyJson) dmCopyJson.addEventListener("click", () => {
+    if (!_dmCurrent) return;
+    try { navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(_dmCurrent.row, null, 2)); } catch (e) {}
+    toast("JSON이 복사되었습니다", "success");
+  });
+  const dmOpenKdsis = document.getElementById("dmOpenKdsis");
+  if (dmOpenKdsis) dmOpenKdsis.addEventListener("click", () => {
+    if (!_dmCurrent) return;
+    const specNo = _dmCurrent.row["규격번호"];
+    if (!specNo) return;
+    try { navigator.clipboard && navigator.clipboard.writeText(specNo); } catch (e) {}
+    const url = (typeof KDSIS_PORTAL_URL === "string" && KDSIS_PORTAL_URL)
+      ? KDSIS_PORTAL_URL : "https://kdsis.dapa.go.kr/";
+    window.open(url, "_blank", "noopener");
+    toast(`${specNo} 복사됨 — KDSIS 새 탭이 열렸습니다`, "info");
+  });
+}
+
+// Card body click → open detail modal (delegated on .messages)
+messages.addEventListener("click", (e) => {
+  const card = e.target.closest(".card.clickable");
+  if (!card) return;
+  // Inner interactive elements should NOT trigger the modal — they have
+  // their own handlers (spec-no copy, attach-load-btn, KDSIS external link,
+  // <details> summary, <a> tags).
+  if (e.target.closest("button, summary, a, input, label, .attach-block, .attach-panel, [contenteditable]")) return;
+  const json = card.getAttribute("data-row-json");
+  const params = card.getAttribute("data-search-params") || "{}";
+  if (!json) return;
+  try {
+    const decode = (s) => s.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+    const row = JSON.parse(decode(json));
+    const sp = JSON.parse(decode(params));
+    openDetailModal(row, sp);
+  } catch (err) {
+    console.warn("[detail] failed to open modal:", err);
+  }
+});
+// Keyboard: Enter / Space on focused card opens modal
+messages.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const card = e.target.closest && e.target.closest(".card.clickable");
+  if (!card || !card.matches(":focus")) return;
+  if (e.target !== card) return;
+  e.preventDefault();
+  card.click();
+});
+// Esc closes detail modal
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && detailModal && !detailModal.hidden) closeDetailModal();
 });
 
 // If the page loaded with a share hash, run that search instead of
