@@ -99,8 +99,10 @@
     .brand-full{display:flex;flex-direction:column;gap:1px;min-width:0}
     .brand-title-desktop{font-size:.9375rem;font-weight:600;color:var(--text);letter-spacing:-.01em;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .brand-subtitle-desktop{font-size:.6875rem;font-weight:500;color:var(--text-tertiary);letter-spacing:-.01em;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .status{font-size:.8125rem;color:var(--green);font-weight:500}
+    .status{font-size:.8125rem;color:var(--green);font-weight:500;letter-spacing:-.01em;display:inline-flex;align-items:center;gap:.375rem;flex-shrink:0}
+    .status::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block;flex-shrink:0}
     .status.busy{color:var(--warning)}
+    .status.busy::before{animation:pulse 1.6s ease-in-out infinite}
     .reset-btn{flex-shrink:0;display:inline-flex;align-items:center;gap:.25rem;font-size:.8125rem;font-weight:500;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:.375rem .625rem;cursor:pointer;font-family:var(--font);transition:all .15s}
     .reset-btn:hover{color:var(--primary);border-color:var(--primary-light);background:var(--surface-alt)}
     .reset-btn:disabled{opacity:.5;cursor:not-allowed}
@@ -692,7 +694,7 @@
           <span class="brand-subtitle-desktop" id="chatSubtitle">방금 시작 · KDSIS 실시간 연결됨</span>
         </span>
       </h1>
-      <span class="status" id="status" role="status" aria-live="polite">● 온라인</span>
+      <span class="status" id="status" role="status" aria-live="polite">온라인</span>
       <button class="icon-btn" id="shareBtn" type="button" aria-label="현재 검색 공유 링크 복사" title="공유 링크 복사 (Shift+S)">
         <span aria-hidden="true">🔗</span>
       </button>
@@ -1700,7 +1702,7 @@ async function runDirectSearch(params, displayText) {
         errorBlockHTML(`서버 에러 (HTTP ${res.status})`, snippet) +
         retryButtonHTML()
       );
-      setStatus("● 온라인", false);
+      setStatus("온라인", false);
       busy = false;
       scrollBottom();
       return;
@@ -1713,7 +1715,7 @@ async function runDirectSearch(params, displayText) {
     removeTyping(typingId);
     addBotMessage(errorBlockHTML(`네트워크 에러: ${err.message}`, err.stack || "") + retryButtonHTML());
   }
-  setStatus("● 온라인", false);
+  setStatus("온라인", false);
   busy = false;
   scrollBottom();
 }
@@ -1821,7 +1823,7 @@ async function sendBatch(queries) {
   }
 
   updateProgress(true);
-  setStatus("● 온라인", false);
+  setStatus("온라인", false);
   busy = false;
   scrollBottom();
 }
@@ -1898,7 +1900,7 @@ async function sendQuery(text) {
         ) +
         retryButtonHTML()
       );
-      setStatus("● 온라인", false);
+      setStatus("온라인", false);
       busy = false;
       scrollBottom();
       return;
@@ -1917,7 +1919,7 @@ async function sendQuery(text) {
     addBotMessage(errorBlockHTML(`네트워크 에러: ${err.message}`, err.stack || "") + retryButtonHTML());
   }
 
-  setStatus("● 온라인", false);
+  setStatus("온라인", false);
   busy = false;
   scrollBottom();
 }
