@@ -21,11 +21,10 @@
         root.setAttribute("data-theme", "light");
       }
       try {
-        // Default to collapsed on desktop ("more reading room") unless the
-        // user explicitly expanded before. Mobile is unaffected — the sidebar
-        // is a slide-in sheet there.
-        var sb = localStorage.getItem("kdsis-sb-collapsed");
-        if (sb === "1" || sb === null) root.classList.add("sb-collapsed");
+        // Default to the expanded desktop sidebar from the onboarding design.
+        // Use a versioned key so older collapsed state cannot squeeze v2.
+        var sb = localStorage.getItem("kdsis-sb-collapsed-v2");
+        if (sb === "1") root.classList.add("sb-collapsed");
       } catch (e) {}
     })();
   </script>
@@ -96,6 +95,10 @@
     .app{display:flex;flex-direction:column;height:100dvh;min-height:100vh}
     .header{display:flex;align-items:center;gap:1rem;padding:.75rem 1.5rem;background:var(--surface);border-bottom:1px solid var(--border);min-height:56px}
     .header h1{font-size:1.0625rem;font-weight:600;flex:1}
+    .brand-mark-mobile,.brand-copy-mobile{display:none}
+    .brand-full{display:flex;flex-direction:column;gap:1px;min-width:0}
+    .brand-title-desktop{font-size:.9375rem;font-weight:600;color:var(--text);letter-spacing:-.01em;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .brand-subtitle-desktop{font-size:.6875rem;font-weight:500;color:var(--text-tertiary);letter-spacing:-.01em;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .status{font-size:.8125rem;color:var(--green);font-weight:500}
     .status.busy{color:var(--warning)}
     .reset-btn{flex-shrink:0;display:inline-flex;align-items:center;gap:.25rem;font-size:.8125rem;font-weight:500;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:.375rem .625rem;cursor:pointer;font-family:var(--font);transition:all .15s}
@@ -106,15 +109,18 @@
     .icon-btn .theme-icon{transition:transform .3s ease}
     .icon-btn:hover .theme-icon{transform:rotate(-15deg) scale(1.1)}
 
-    .messages{flex:1;overflow-y:auto;padding:1.5rem 1rem;scroll-behavior:smooth}
+    .messages{flex:1;overflow-y:auto;padding:1.5rem 0;scroll-behavior:smooth}
 
     /* Messages */
-    .msg{display:flex;gap:.75rem;max-width:800px;margin:0 auto 1.25rem;padding:0 .75rem;animation:fadeUp .3s ease-out}
+    .msg{display:flex;gap:.75rem;max-width:760px;margin:0 auto 1.25rem;padding:0 1.5rem;animation:fadeUp .3s ease-out}
     .msg--user{flex-direction:row-reverse}
     .msg--user .bubble{background:var(--primary);color:var(--inverse);border-radius:var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);padding:.75rem 1rem;max-width:75%}
     .msg--user .bubble p{word-break:break-word}
     .msg--bot .bubble{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg) var(--r-lg) var(--r-lg) var(--r-sm);padding:1rem 1.25rem;max-width:85%;box-shadow:var(--sh-sm)}
     .avatar{width:36px;height:36px;border-radius:var(--r-full);background:var(--surface);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:1.0625rem;flex-shrink:0}
+    .msg--bot:has(.result-wrap){max-width:760px;width:100%;gap:0;scroll-margin-top:1rem}
+    .msg--bot:has(.result-wrap) .avatar{display:none}
+    .msg--bot:has(.result-wrap) .bubble{background:transparent;border:none;box-shadow:none;border-radius:0;padding:0;width:100%;max-width:none}
 
     /* Typing */
     .dots{display:flex;gap:6px;align-items:center;height:20px}
@@ -129,8 +135,8 @@
     .search-progress::before{content:"";position:absolute;left:-40%;top:0;bottom:0;width:40%;background:var(--primary);border-radius:1px;animation:searchProgressSlide 1.4s ease-in-out infinite}
     @keyframes searchProgressSlide{0%{left:-40%}100%{left:100%}}
     .search-time{margin-top:.5rem;font-family:var(--mono);font-size:.6875rem;color:var(--text-tertiary);letter-spacing:0}
-    .search-params{display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.75rem}
-    .param-tag{font-size:.75rem;padding:3px 10px;background:var(--primary-tint);color:var(--primary);border-radius:var(--r-full);font-weight:500}
+    .search-params{display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.625rem}
+    .param-tag{font-family:var(--mono);font-size:.71875rem;padding:3px 9px;background:var(--primary-tint);color:var(--primary-soft-text);border-radius:4px;font-weight:500;letter-spacing:0}
     .batch-query-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;padding:.5rem .75rem;background:var(--primary-tint);border-radius:var(--r-md);font-size:.8125rem;font-weight:600;color:var(--primary)}
     .batch-query-header::before{content:"🔎";font-size:.9rem}
     .batch-progress{display:flex;align-items:center;gap:.75rem;padding:.625rem .875rem;background:var(--bg-soft,rgba(0,0,0,.03));border:1px solid var(--border,rgba(0,0,0,.08));border-radius:var(--r-md);font-size:.8125rem;margin-bottom:.5rem}
@@ -150,10 +156,11 @@
 
     /* Result — card + table hybrid */
     .result-wrap{width:100%;margin:.75rem 0}
-    .result-intro{font-size:.9375rem;margin-bottom:.75rem}
-    .result-intro strong{color:var(--primary)}
-    .result-toolbar{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap}
-    .chip{font-size:.75rem;padding:4px 10px;border-radius:var(--r-full);font-weight:500;background:var(--surface-alt);color:var(--text)}
+    .result-intro{font-size:.8125rem;color:var(--muted);letter-spacing:-.01em;margin-bottom:.625rem}
+    .result-intro strong{color:var(--text);font-weight:600}
+    .result-footnote{margin-top:.875rem;font-size:.75rem;color:var(--text-tertiary);letter-spacing:-.01em}
+    .result-toolbar{display:flex;align-items:center;gap:.375rem;margin-bottom:.875rem;flex-wrap:wrap}
+    .chip{font-size:.75rem;padding:4px 10px;border-radius:6px;font-weight:500;background:var(--surface-alt);color:var(--text)}
     .chip-count{background:var(--primary-tint-strong);color:var(--primary)}
     .view-toggle{font-size:.75rem;padding:4px 10px;border:1px solid var(--border);background:var(--surface);border-radius:var(--r-sm);cursor:pointer;color:var(--muted);font-family:var(--font);transition:all .15s}
     .view-toggle:hover{background:var(--surface-alt);color:var(--text)}
@@ -184,11 +191,12 @@
     .pgn-size{font-size:.75rem;padding:3px 6px;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:var(--r-sm);font-family:var(--font);cursor:pointer}
 
     /* Cards */
-    .cards{display:grid;gap:.625rem}
-    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:1rem;transition:transform .12s ease,border-color .15s,box-shadow .15s}
+    .cards{display:grid;gap:.5rem}
+    .card{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:.875rem 1rem;transition:transform .12s ease,border-color .15s,box-shadow .15s}
     .card:hover{border-color:var(--primary-light);box-shadow:var(--sh-sm)}
     .card:active{transform:scale(.985)}
     .card.selected{border-color:var(--primary);box-shadow:var(--ring)}
+    .card.selected::after{content:"선택됨";position:absolute;right:.875rem;top:.875rem;font-size:.6875rem;font-weight:500;letter-spacing:-.01em;color:var(--primary-soft-text);background:var(--primary-soft);border-radius:4px;padding:3px 8px}
     .card-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.375rem;flex-wrap:wrap}
     .spec-no{font-family:var(--mono);font-size:.75rem;font-weight:500;color:var(--primary-soft-text);background:var(--primary-soft);padding:3px 8px;border-radius:var(--r-sm);letter-spacing:.02em}
     .spec-kind{font-size:.75rem;color:var(--muted);padding:3px 8px;background:var(--surface-alt);border-radius:var(--r-sm)}
@@ -200,11 +208,11 @@
     [data-theme="dark"] .status-transition{border-color:transparent}
     .status-abolished{background:var(--error-tint-strong);color:var(--error);border-color:#FCA5A5}
     [data-theme="dark"] .status-abolished{border-color:transparent}
-    .card-title{font-size:1rem;font-weight:600;color:var(--text);margin-bottom:.5rem;line-height:1.3;letter-spacing:-.01em}
-    .card-meta{display:flex;flex-wrap:wrap;gap:.375rem .875rem;font-size:.75rem;color:var(--muted);margin-bottom:.375rem;letter-spacing:-.01em}
+    .card-title{font-size:.875rem;font-weight:600;color:var(--text);margin-bottom:.375rem;line-height:1.35;letter-spacing:-.01em}
+    .card-meta{display:flex;flex-wrap:wrap;gap:.25rem .75rem;font-size:.75rem;color:var(--muted);margin-bottom:.25rem;letter-spacing:-.01em}
     .card-meta .mi{display:inline-flex;align-items:center;gap:.25rem}
     .card-meta .mi strong{color:var(--text);font-weight:500}
-    .card-dates{font-size:.8125rem;color:var(--muted);padding-top:.5rem;border-top:1px dashed var(--border);margin-top:.5rem}
+    .card-dates{font-size:.75rem;color:var(--muted);padding-top:.5rem;border-top:1px solid var(--divider);margin-top:.5rem}
     .card-dates span{margin-right:.875rem}
     .card-more{margin-top:.5rem}
     .card-more summary{font-size:.8125rem;color:var(--primary);cursor:pointer;padding:.375rem .25rem;user-select:none;list-style:none;display:inline-flex;align-items:center;gap:.25rem;font-weight:500}
@@ -225,6 +233,13 @@
     .attach-load-btn.attach-none:disabled{cursor:default}
     .attach-panel{margin-top:.5rem;font-size:.8125rem}
     .attach-loading,.attach-empty{color:var(--muted);padding:.375rem .25rem}
+    .attach-wait{padding:.625rem .75rem;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--primary-row);color:var(--text)}
+    .attach-wait-head{display:flex;align-items:baseline;justify-content:space-between;gap:.75rem;margin-bottom:.25rem}
+    .attach-wait-title{font-weight:600;color:var(--primary)}
+    .attach-wait-time{color:var(--muted);font-size:.75rem;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .attach-wait-hint{color:var(--muted);line-height:1.45}
+    .attach-wait-meter{height:4px;margin-top:.5rem;border-radius:999px;background:var(--surface);overflow:hidden}
+    .attach-wait-bar{height:100%;width:var(--wait-progress,8%);max-width:96%;background:var(--primary);border-radius:inherit;transition:width .3s ease}
     .attach-err{color:var(--error);padding:.375rem .5rem;background:var(--error-tint);border:1px solid var(--error-border);border-radius:var(--r-sm)}
     .attach-diag{margin-top:.375rem;font-size:.75rem}
     .attach-diag summary{cursor:pointer;color:var(--error);user-select:none}
@@ -285,7 +300,8 @@
     .sample-label{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
 
     /* Input */
-    .input-area{padding:.75rem 1.5rem 1.25rem;background:var(--bg);max-width:calc(800px + 4rem);width:100%;margin:0 auto}
+    .input-area{padding:.875rem 1.5rem 1rem;background:var(--surface);border-top:1px solid var(--divider);width:100%;margin:0}
+    .input-area .input-wrap,.input-area .hint,.input-area .input-counter{max-width:760px;margin-left:auto;margin-right:auto}
     .input-wrap{position:relative}
     .recent-panel{position:absolute;left:0;right:0;bottom:calc(100% + .5rem);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);box-shadow:var(--sh-md);padding:.375rem;max-height:280px;overflow-y:auto;z-index:50;animation:fadeUp .15s ease-out}
     .recent-panel[hidden]{display:none}
@@ -311,7 +327,7 @@
     .hint{font-size:.75rem;color:var(--muted);text-align:center;margin-top:.5rem}
 
     /* Screenshot debug */
-    .debug-toggle{font-size:.8125rem;color:var(--muted);cursor:pointer;text-decoration:underline;margin-top:.75rem;display:inline-block;padding:.25rem .125rem;background:none;border:none;font-family:var(--font)}
+    .debug-toggle{font-size:.8125rem;color:var(--muted);cursor:pointer;text-decoration:underline;margin-top:.75rem;display:none;padding:.25rem .125rem;background:none;border:none;font-family:var(--font)}
     .debug-toggle:hover{color:var(--text)}
     .debug-img{max-width:100%;border:1px solid var(--border);border-radius:var(--r-sm);margin-top:.5rem;display:none}
     .debug-img.show{display:block}
@@ -384,24 +400,41 @@
       .msg--user .bubble{max-width:85%}
       .msg--bot .bubble{max-width:95%}
       .input-area{padding:.5rem .75rem .75rem}
-      .header{padding:.625rem 1rem}
+      .header{padding:.875rem 1rem;min-height:72px;gap:.5rem}
       .header h1{font-size:.9375rem}
+      .brand-heading{flex:1;min-width:0;display:flex;align-items:center;gap:.625rem;line-height:1.2;letter-spacing:0}
+      .brand-full{display:none}
+      .brand-mark-mobile{width:36px;height:36px;border-radius:9px;background:var(--primary);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:.75rem;font-weight:700;letter-spacing:0;box-shadow:0 1px 2px rgba(15,23,42,.10);flex-shrink:0}
+      .brand-copy-mobile{display:flex;flex-direction:column;gap:1px;min-width:0}
+      .brand-title-mobile{font-size:1rem;font-weight:700;color:var(--text);letter-spacing:-.01em}
+      .brand-subtitle-mobile{font-size:.75rem;font-weight:500;color:var(--muted);letter-spacing:-.01em;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+      .brand-subtitle-mobile::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
+      .header .status,
+      .header #shareBtn,
+      .header #helpBtn,
+      .header #themeBtn,
+      .header #resetBtn{display:none}
+      .header .hamburger{margin-left:auto}
+      .result-toolbar [data-download-kdsis],
+      .result-toolbar [data-download-csv],
+      .result-toolbar [data-download-json],
+      .result-footnote{display:none}
       .reset-btn span:not(.sr-only){display:none}
       .card-meta{gap:.25rem .75rem}
     }
     /* Tablet */
     @media(min-width:641px) and (max-width:1024px){
       .msg{max-width:720px}
-      .input-area{max-width:calc(720px + 4rem)}
+      .input-area .input-wrap,.input-area .hint,.input-area .input-counter{max-width:720px}
     }
     /* Wide desktop */
     @media(min-width:1280px){
-      .msg{max-width:920px}
-      .input-area{max-width:calc(920px + 4rem)}
+      .msg{max-width:760px}
+      .input-area .input-wrap,.input-area .hint,.input-area .input-counter{max-width:760px}
     }
     @media(min-width:1600px){
-      .msg{max-width:1080px}
-      .input-area{max-width:calc(1080px + 4rem)}
+      .msg{max-width:760px}
+      .input-area .input-wrap,.input-area .hint,.input-area .input-counter{max-width:760px}
       body{font-size:1rem}
     }
 
@@ -518,10 +551,18 @@
        작은 우측 패널보다 가독성·복사 편의가 우월하다는 사용자 결정. */
     @media (min-width: 1024px) {
       .sidebar-backdrop{display:none !important}
-      .sidebar{position:fixed;top:0;left:0;right:auto;bottom:0;width:280px;
+      .sidebar{position:fixed;top:0;left:0;right:auto;bottom:0;width:256px;
         transform:none !important;transition:width .22s ease,padding .22s ease;
         box-shadow:none;border-left:none;border-right:1px solid var(--divider)}
       .sidebar[hidden]{display:flex !important}
+      #sidebarCloseBtn{display:none}
+      .header{min-height:64px;padding:1rem 1.5rem;background:var(--surface);align-items:center}
+      .header .status,
+      .header #helpBtn,
+      .header #themeBtn,
+      .header #resetBtn,
+      .header #menuBtn{display:none}
+      .header #shareBtn{margin-left:auto}
       .sidebar.collapsed{width:56px}
       .sidebar.collapsed .sb-brand,
       .sidebar.collapsed .sb-online,
@@ -541,13 +582,28 @@
       .sidebar.collapsed .sb-newchat{padding:8px 0;gap:0;justify-content:center}
       .sidebar.collapsed .sb-item{padding:8px 6px;text-align:center}
       .sidebar.collapsed .sb-foot{padding:10px 6px;justify-content:center;gap:0}
-      .app{padding-left:280px;transition:padding-left .22s ease}
+      .app{padding-left:256px;padding-right:0;transition:padding-left .22s ease,padding-right .18s ease}
       html.sb-collapsed .app{padding-left:56px}
+      html.detail-open .app{padding-right:300px}
       /* 햄버거 버튼은 데스크톱에서 collapse 토글 — 시각적 hint로 회전 */
       .icon-btn.hamburger svg{transition:transform .22s ease}
       html.sb-collapsed .icon-btn.hamburger svg{transform:rotate(90deg)}
       /* 입력 영역도 사이드바 폭만큼 안쪽 정렬되도록 */
-      .input-area{max-width:calc(900px + 4rem)}
+      .input-area .input-wrap,.input-area .hint,.input-area .input-counter{max-width:760px}
+      .result-toolbar{display:none}
+      .cards{gap:.5rem}
+      .card{padding:.625rem .75rem}
+      .card.selected{box-shadow:none}
+      .card-head{margin-bottom:.125rem;padding-right:4.5rem}
+      .spec-no,.spec-no.copyable,.spec-kind,.status-badge{font-size:.6875rem;padding:2px 7px}
+      .spec-kind{display:none}
+      .card-title{font-size:.875rem;margin-bottom:.125rem;line-height:1.25}
+      .card-meta{display:inline-flex;font-size:.71875rem;gap:.25rem .625rem;margin:0 .625rem 0 0;line-height:1.25}
+      .card-dates{display:inline-flex;font-size:.71875rem;border-top:none;padding-top:0;margin-top:0;line-height:1.25}
+      .card-dates span{margin-right:.75rem}
+      .card-meta .mi:nth-child(n+2){display:none}
+      .card-dates span:first-child{display:none}
+      .card-more,.card .attach-block,.card-tap-hint{display:none !important}
     }
 
     /* ── Detail modal (큰 모달, 시안 Screen 5) ──────────────────
@@ -562,6 +618,28 @@
     .dm-action{display:inline-flex;align-items:center;gap:.25rem;padding:.375rem .625rem;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--surface);color:var(--muted);font-family:var(--font);font-size:.75rem;font-weight:500;letter-spacing:-.01em;cursor:pointer;transition:background-color .12s,color .12s,border-color .12s}
     .dm-action:hover{color:var(--text);border-color:var(--border-strong);background:var(--surface-hover)}
     .dm-action.copied{color:var(--primary-soft-text);background:var(--primary-soft);border-color:var(--primary-soft)}
+
+    @media (min-width:1024px){
+      #detailModal{align-items:stretch;justify-content:flex-end;padding:0;top:64px;left:auto;bottom:0;right:0;width:300px}
+      #detailModal .modal-backdrop{display:none}
+      #detailModal .detail-panel{width:300px;max-width:none;height:calc(100dvh - 64px);max-height:none;border-radius:0;border-top:none;border-right:none;box-shadow:none;overflow-y:auto;animation:detailPanelIn .18s ease-out}
+      #detailModal .dm-head{border-radius:0;padding:1rem 1rem .875rem}
+      #detailModal .dm-title{font-size:1rem}
+      #detailModal .dm-body{padding:1rem}
+      #detailModal .dm-actions{gap:.375rem}
+      #detailModal .dm-action{padding:.35rem .55rem;font-size:.72rem}
+      #detailModal #dmCopyJson,
+      #detailModal #dmOpenKdsis,
+      #detailModal .dm-section:has(#dmAllFields),
+      #detailModal .dm-section:has(#dmAttach){display:none}
+    }
+    @media (max-width:640px){
+      #detailModal{align-items:flex-end;padding:0}
+      #detailModal .detail-panel{width:100%;max-width:none;max-height:86dvh;border-radius:16px 16px 0 0;border-bottom:none;animation:sheetIn .22s ease-out}
+      #detailModal .dm-head{border-radius:16px 16px 0 0}
+    }
+    @keyframes detailPanelIn{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:translateX(0)}}
+    @keyframes sheetIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
     .dm-action.primary{background:var(--primary);color:#fff;border-color:var(--primary)}
     .dm-action.primary:hover{background:var(--primary-light);color:#fff}
     .dm-section{padding:1rem 1rem 0}
@@ -603,7 +681,17 @@
   <a class="skip-link" href="#messages">본문으로 건너뛰기</a>
   <div class="app">
     <header class="header" role="banner">
-      <h1>🎖️ 국방 AI 어시스턴트 — KDSIS 실시간 검색</h1>
+      <h1 class="brand-heading">
+        <span class="brand-mark-mobile" aria-hidden="true">K</span>
+        <span class="brand-copy-mobile">
+          <span class="brand-title-mobile">국방 AI</span>
+          <span class="brand-subtitle-mobile" id="mobileHeaderSubtitle">KDSIS 실시간 검색</span>
+        </span>
+        <span class="brand-full">
+          <span class="brand-title-desktop" id="chatTitle">새 대화</span>
+          <span class="brand-subtitle-desktop" id="chatSubtitle">방금 시작 · KDSIS 실시간 연결됨</span>
+        </span>
+      </h1>
       <span class="status" id="status" role="status" aria-live="polite">● 온라인</span>
       <button class="icon-btn" id="shareBtn" type="button" aria-label="현재 검색 공유 링크 복사" title="공유 링크 복사 (Shift+S)">
         <span aria-hidden="true">🔗</span>
@@ -636,11 +724,10 @@
         </div>
         <div class="prompts-label">예시 질문</div>
         <div class="prompts" id="prompts" role="list" aria-label="추천 검색어">
-          <button class="prompt-card" type="button" role="listitem" data-q="규격번호 1005-0409 (구경50미리)" data-direct-params='{"규격번호":"1005-0409"}'><span class="pi" aria-hidden="true">🔍</span><span class="prompt-card-text">규격번호 1005-0409 (구경50미리)</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-          <button class="prompt-card" type="button" role="listitem" data-q="K2 소총 · 활성 규격" data-direct-params='{"적용장비명":"K2 소총","규격상태":"활성"}'><span class="pi" aria-hidden="true">🎯</span><span class="prompt-card-text">K2 소총 · 활성 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-          <button class="prompt-card" type="button" role="listitem" data-q="K9 자주포 · 활성 규격" data-direct-params='{"적용장비명":"K9 자주포","규격상태":"활성"}'><span class="pi" aria-hidden="true">⚙️</span><span class="prompt-card-text">K9 자주포 · 활성 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-          <button class="prompt-card" type="button" role="listitem" data-q="방위사업청 제정 · KDS · 활성" data-direct-params='{"제정기관":"방위사업청","규격종류":"KDS (국방/표준)","규격상태":"활성"}'><span class="pi" aria-hidden="true">🏛️</span><span class="prompt-card-text">방위사업청 제정 · KDS · 활성</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-          <button class="prompt-card" type="button" role="listitem" data-q="국방기술품질원 제정 · 활성 규격" data-direct-params='{"제정기관":"국방기술품질원","규격상태":"활성"}'><span class="pi" aria-hidden="true">📋</span><span class="prompt-card-text">국방기술품질원 제정 · 활성 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="prompt-card" type="button" role="listitem" data-q="K2 소총 활성 규격 보여줘" data-direct-params='{"적용장비명":"K2 소총","규격상태":"활성"}'><span class="prompt-card-text">K2 소총 활성 규격 보여줘</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="prompt-card" type="button" role="listitem" data-q="국방규격 1005-0409 상세 정보" data-direct-params='{"규격번호":"1005-0409"}'><span class="prompt-card-text">국방규격 1005-0409 상세 정보</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="prompt-card" type="button" role="listitem" data-q="제정기관이 육군인 활성 규격" data-direct-params='{"제정기관":"육군","규격상태":"활성"}'><span class="prompt-card-text">제정기관이 육군인 활성 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="prompt-card" type="button" role="listitem" data-q="방탄복 관련 최신 규격"><span class="prompt-card-text">방탄복 관련 최신 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         <div class="welcome-footnote">데이터는 저장하지 않으며 매 요청마다 KDSIS를 실시간 조회합니다.</div>
       </div>
@@ -856,7 +943,20 @@ const resetBtn = document.getElementById("resetBtn");
 const themeBtn = document.getElementById("themeBtn");
 const jumpBtn = document.getElementById("jumpBottom");
 const inputCounter = document.getElementById("inputCounter");
+const chatTitleEl = document.getElementById("chatTitle");
+const chatSubtitleEl = document.getElementById("chatSubtitle");
+const mobileHeaderSubtitleEl = document.getElementById("mobileHeaderSubtitle");
 let busy = false;
+
+function clampTitle(text, fallback = "새 대화") {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  return clean ? (clean.length > 28 ? clean.slice(0, 28) + "…" : clean) : fallback;
+}
+function setChatHeading(title, subtitle, mobileSubtitle) {
+  if (chatTitleEl) chatTitleEl.textContent = title || "새 대화";
+  if (chatSubtitleEl) chatSubtitleEl.textContent = subtitle || "방금 시작 · KDSIS 실시간 연결됨";
+  if (mobileHeaderSubtitleEl) mobileHeaderSubtitleEl.textContent = mobileSubtitle || "KDSIS 실시간 검색";
+}
 
 // ── Scroll follow ──
 // When the user has scrolled up to re-read earlier content, we must NOT yank
@@ -897,6 +997,84 @@ function toast(message, variant = "info", duration = 2200) {
     t.classList.add("leaving");
     t.addEventListener("animationend", () => t.remove(), { once: true });
   }, duration);
+}
+
+// KDSIS detail/download calls can legitimately take 2+ minutes. Keep the UI
+// alive with elapsed time and expectation-setting copy so users know the
+// request is still working.
+const KDSIS_WAIT_STEPS = [
+  {
+    after: 0,
+    title: "KDSIS 상세 페이지 연결 중",
+    hint: "보통 30초 안에 끝나지만, KDSIS가 느리면 2~3분 걸릴 수 있습니다.",
+  },
+  {
+    after: 30,
+    title: "상세 팝업 응답 대기 중",
+    hint: "아직 정상 대기 상태입니다. 창을 닫거나 새로고침하지 않아도 됩니다.",
+  },
+  {
+    after: 75,
+    title: "KDSIS가 느리게 응답 중",
+    hint: "최근 느린 케이스는 약 140초에 성공했습니다. 조금 더 기다려 주세요.",
+  },
+  {
+    after: 135,
+    title: "장시간 대기 구간",
+    hint: "서버가 계속 상세 페이지와 첨부파일을 확인하고 있습니다.",
+  },
+  {
+    after: 180,
+    title: "3분 이상 지연 중",
+    hint: "KDSIS 응답이 길어지고 있습니다. 실패 메시지가 나오기 전까지 요청은 유지됩니다.",
+  },
+];
+function formatElapsed(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const m = Math.floor(s / 60);
+  const rest = String(s % 60).padStart(2, "0");
+  return m > 0 ? `${m}:${rest}` : `${s}초`;
+}
+function waitStepFor(seconds) {
+  let current = KDSIS_WAIT_STEPS[0];
+  for (const step of KDSIS_WAIT_STEPS) {
+    if (seconds >= step.after) current = step;
+  }
+  return current;
+}
+function kdsisWaitHTML({ elapsedSeconds, spec }) {
+  const step = waitStepFor(elapsedSeconds);
+  const progress = Math.min(96, 8 + Math.round((elapsedSeconds / 150) * 88));
+  const target = spec ? ` · ${spec}` : "";
+  return `
+    <div class="attach-wait" role="status" aria-live="polite" style="--wait-progress:${progress}%">
+      <div class="attach-wait-head">
+        <span class="attach-wait-title">${esc(step.title)}${esc(target)}</span>
+        <span class="attach-wait-time">경과 ${esc(formatElapsed(elapsedSeconds))}</span>
+      </div>
+      <div class="attach-wait-hint">${esc(step.hint)}</div>
+      <div class="attach-wait-meter" aria-hidden="true"><div class="attach-wait-bar"></div></div>
+    </div>
+  `;
+}
+function startKdsisWaitFeedback({ panel, button, buttonText, spec } = {}) {
+  const startedAt = Date.now();
+  const originalTitle = button ? button.title : "";
+  const render = () => {
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+    const step = waitStepFor(elapsedSeconds);
+    if (panel && panel.isConnected) panel.innerHTML = kdsisWaitHTML({ elapsedSeconds, spec });
+    if (button) {
+      button.textContent = `${buttonText || "처리 중"} ${formatElapsed(elapsedSeconds)}`;
+      button.title = `${step.title} · ${step.hint}`;
+    }
+  };
+  render();
+  const timer = setInterval(render, 1000);
+  return () => {
+    clearInterval(timer);
+    if (button) button.title = originalTitle;
+  };
 }
 
 // ── Shareable URL ──
@@ -1260,6 +1438,8 @@ function resetChat() {
   clearSession();
   resultDataByUid.clear();
   lastSearch = null;
+  closeDetailModal();
+  setChatHeading("새 대화", "방금 시작 · KDSIS 실시간 연결됨", "KDSIS 실시간 검색");
   // Drop the share hash too — we're on a clean slate
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   input.focus();
@@ -1485,6 +1665,7 @@ form.addEventListener("submit", (e) => {
 async function runDirectSearch(params, displayText) {
   busy = true;
   lastSearch = { kind: "direct", params, label: displayText };
+  setChatHeading(clampTitle(displayText), "KDSIS 그리드를 파싱 중입니다", "검색 중…");
   updateShareHash(lastSearch);
   rememberRecent(displayText);
   hideRecent();
@@ -1544,6 +1725,7 @@ async function runDirectSearch(params, displayText) {
 async function sendBatch(queries) {
   busy = true;
   lastSearch = { kind: "batch", queries };
+  setChatHeading(`${queries.length}개 일괄 검색`, "KDSIS 그리드를 순차 조회 중입니다", "일괄 검색 중…");
   updateShareHash(lastSearch);
   queries.forEach((q) => rememberRecent(q));
   hideRecent();
@@ -1672,6 +1854,7 @@ function handleBatchEvent(ev, queries) {
 async function sendQuery(text) {
   busy = true;
   lastSearch = { kind: "query", text };
+  setChatHeading(clampTitle(text), "KDSIS 그리드를 파싱 중입니다", "검색 중…");
   updateShareHash(lastSearch);
   rememberRecent(text);
   hideRecent();
@@ -1762,6 +1945,7 @@ function addBotMessage(html, opts) {
   // persisted separately via addResultMessage to retain structured data.
   if (!opts || !opts.skipPersist) pushEvent({ type: "bot", html });
   scrollBottom();
+  return div;
 }
 
 // 상태 → 배지 클래스
@@ -1948,6 +2132,15 @@ function addResultMessage(data) {
   // 배치 검색인 경우: 어떤 쿼리의 결과인지 카드 최상단에 명시
   if (data.__batchHeader) html += data.__batchHeader;
 
+  const resultCount = Number.isFinite(Number(data.totalCount)) ? Number(data.totalCount) : data.rows.length;
+  if (!data.__batchHeader) {
+    const params = data.searchParams && typeof data.searchParams === "object"
+      ? Object.entries(data.searchParams).filter(([_, v]) => !isEmpty(v))
+      : [];
+    const condition = params.slice(0, 2).map(([_, v]) => String(v).trim()).filter(Boolean).join(" / ");
+    html += `<div class="result-intro">KDSIS에서 ${condition ? `<strong>${esc(condition)}</strong> 조건으로 ` : ""}<strong>${resultCount}</strong>건을 찾았습니다.</div>`;
+  }
+
   // 검색 파라미터 태그
   if (data.searchParams && Object.keys(data.searchParams).length > 0) {
     html += '<div class="search-params">';
@@ -1981,6 +2174,7 @@ function addResultMessage(data) {
 
   // Card + table views (paged)
   html += `<div class="cards" id="${uid}-cards">${renderCardsHtml(data, slice, terms)}</div>`;
+  html += `<div class="result-footnote">카드를 클릭하면 우측에 상세 정보가 나타납니다. 다른 조건이 필요하면 추가 질문을 입력하세요.</div>`;
   html += `<div class="result-wrap hidden" id="${uid}-table">${renderTableHtml(data, slice, terms, null)}</div>`;
 
   // Pagination bar (only if meaningful)
@@ -1992,7 +2186,10 @@ function addResultMessage(data) {
     html += `<img class="debug-img" src="/api/screenshot?t=${Date.now()}" alt="KDSIS 검색 화면 캡처" loading="lazy">`;
   }
 
-  addBotMessage(html, { skipPersist: true });
+  const resultNode = addBotMessage(html, { skipPersist: true });
+  if (!data.__restored && resultNode) {
+    setTimeout(() => resultNode.scrollIntoView({ block: "start", behavior: "smooth" }), 80);
+  }
   // Persist structured payload so we can re-render after reload without re-fetching
   pushEvent({
     type: "result",
@@ -2266,8 +2463,11 @@ async function handleClickDelegated(e) {
     )];
     const oldText = kdsisZipBtn.textContent;
     kdsisZipBtn.disabled = true;
-    kdsisZipBtn.textContent = "수집 중…";
-    toast("KDSIS에서 엑셀과 첨부파일을 모으는 중입니다", "info", 3500);
+    const stopZipWait = startKdsisWaitFeedback({
+      button: kdsisZipBtn,
+      buttonText: "수집 중",
+    });
+    toast("KDSIS에서 엑셀과 첨부파일을 모으는 중입니다. 느리면 2~3분 정도 걸릴 수 있습니다.", "info", 6500);
     try {
       const res = await fetch("/api/download/bundle", {
         method: "POST",
@@ -2297,6 +2497,7 @@ async function handleClickDelegated(e) {
     } catch (err) {
       toast(`원본 ZIP 실패: ${err.message}`, "error", 4500);
     } finally {
+      stopZipWait();
       kdsisZipBtn.disabled = false;
       kdsisZipBtn.textContent = oldText;
     }
@@ -2411,10 +2612,14 @@ async function handleClickDelegated(e) {
     if (!spec || !paramsJson) return;
     attachBtn.disabled = true;
     const prevLabel = attachBtn.textContent;
-    attachBtn.textContent = "📎 첨부파일 불러오는 중…";
     panel.hidden = false;
-    panel.innerHTML = '<div class="attach-loading">KDSIS 상세 페이지를 여는 중…</div>';
     attachBtn.setAttribute("aria-expanded", "true");
+    const stopWait = startKdsisWaitFeedback({
+      panel,
+      button: attachBtn,
+      buttonText: "📎 첨부 확인 중",
+      spec,
+    });
     try {
       const qsParams = { params: paramsJson, key: spec };
       if (forceRefresh) qsParams.refresh = "1";
@@ -2478,6 +2683,7 @@ async function handleClickDelegated(e) {
     } catch (err) {
       panel.innerHTML = `<div class="attach-err">네트워크 오류: ${esc(err.message || err)}</div>`;
     } finally {
+      stopWait();
       attachBtn.disabled = false;
       // Loaded buttons reflect result; unloaded/errored revert to prior label
       if (block.dataset.loaded === "1") {
@@ -2753,6 +2959,16 @@ function removeTyping(id) {
 function setStatus(text, isBusy) {
   statusEl.textContent = text;
   statusEl.className = "status" + (isBusy ? " busy" : "");
+  if (isBusy) {
+    if (chatSubtitleEl) chatSubtitleEl.textContent = text.replace(/^●\s*/, "");
+    if (mobileHeaderSubtitleEl) mobileHeaderSubtitleEl.textContent = "검색 중…";
+  } else {
+    const hasSearch = !!lastSearch;
+    if (chatSubtitleEl) chatSubtitleEl.textContent = hasSearch
+      ? "KDSIS 실시간 연결됨"
+      : "방금 시작 · KDSIS 실시간 연결됨";
+    if (mobileHeaderSubtitleEl) mobileHeaderSubtitleEl.textContent = "KDSIS 실시간 검색";
+  }
 }
 
 // Auto-scroll only when user is tracking the bottom; pass force=true for
@@ -2933,6 +3149,7 @@ function applySidebarMode() {
     if (sidebarBackdrop) sidebarBackdrop.hidden = true;
     sidebarEl.classList.toggle("collapsed",
       document.documentElement.classList.contains("sb-collapsed"));
+    if (menuBtn) menuBtn.setAttribute("aria-expanded", String(!sidebarEl.classList.contains("collapsed")));
     renderSidebarRecents(sbSearchInput && sbSearchInput.value);
   } else {
     // Mobile: collapse class is meaningless here.
@@ -2951,7 +3168,7 @@ if (menuBtn) menuBtn.addEventListener("click", () => {
   if (isDesktopVP()) {
     const isCollapsed = sidebarEl.classList.toggle("collapsed");
     document.documentElement.classList.toggle("sb-collapsed", isCollapsed);
-    try { localStorage.setItem("kdsis-sb-collapsed", isCollapsed ? "1" : "0"); } catch (e) {}
+    try { localStorage.setItem("kdsis-sb-collapsed-v2", isCollapsed ? "1" : "0"); } catch (e) {}
     if (menuBtn) menuBtn.setAttribute("aria-expanded", String(!isCollapsed));
   } else {
     openSidebar();
@@ -3155,6 +3372,7 @@ function openDetailModal(row, searchParams) {
   loadDetailModalAttachments(specNo, _dmCurrent.searchParams);
 
   detailModal.hidden = false;
+  document.documentElement.classList.add("detail-open");
   // Focus the close button so Esc/Enter behave naturally
   setTimeout(() => {
     const closeBtn = detailModal.querySelector("[data-modal-close]");
@@ -3165,6 +3383,8 @@ function openDetailModal(row, searchParams) {
 function closeDetailModal() {
   if (!detailModal) return;
   detailModal.hidden = true;
+  document.documentElement.classList.remove("detail-open");
+  document.querySelectorAll(".card.selected").forEach((el) => el.classList.remove("selected"));
   _dmCurrent = null;
 }
 
@@ -3311,6 +3531,8 @@ messages.addEventListener("click", (e) => {
     const decode = (s) => s.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
     const row = JSON.parse(decode(json));
     const sp = JSON.parse(decode(params));
+    document.querySelectorAll(".card.selected").forEach((el) => el.classList.remove("selected"));
+    card.classList.add("selected");
     openDetailModal(row, sp);
   } catch (err) {
     console.warn("[detail] failed to open modal:", err);
