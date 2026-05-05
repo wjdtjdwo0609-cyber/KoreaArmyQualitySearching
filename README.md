@@ -51,6 +51,11 @@ KDSIS_ATTACH_TTL_MS=300000      # 다운로드 바이트 캐시 TTL (5분)
 KDSIS_ATTACH_CACHE_MAX_BYTES=52428800  # 바이트 캐시 총합 상한 (50MB)
 KDSIS_DOWNLOAD_RATE_LIMIT=10    # 분당 IP별 요청 수 상한
 KDSIS_DOWNLOAD_RATE_WINDOW_MS=60000  # 위 상한의 윈도우
+# 피드백 (별점 + 익명 댓글)
+FEEDBACK_LOG_FILE=data/feedback.jsonl  # JSONL append 경로 (선택)
+FEEDBACK_ADMIN_TOKEN=                  # 비워두면 GET /api/feedback 비활성
+KDSIS_FEEDBACK_RATE_LIMIT=10           # 분당 IP별 피드백 제출 상한
+KDSIS_FEEDBACK_RATE_WINDOW_MS=60000    # 위 상한의 윈도우
 ```
 
 AI 키가 없으면 자동으로 규칙 기반 파싱으로 폴백합니다.

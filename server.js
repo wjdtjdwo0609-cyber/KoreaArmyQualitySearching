@@ -3223,7 +3223,87 @@ app.get("/api/health", (req, res) => {
     attachCacheBytes: attachCache.bytes,
     attachCacheMaxBytes: attachCache.maxBytes,
     kdsisBlockCount15m: currentBlockCount(),
+    feedbackCount: feedbackRing.length,
   });
+});
+
+// ── 피드백 (별점 + 익명 댓글) ──────────────────────────────
+//
+// POST /api/feedback { rating: 1-5, comment?: string ≤ 800 chars }
+//   - per-IP rate limit (KDSIS_FEEDBACK_RATE_LIMIT, 기본 10/min)
+//   - in-memory ring buffer (최근 200건) + JSONL append
+//   - 익명: client IP 는 SHA-256 해시 12자만 저장 (역추적 불가, dedup용)
+//
+// GET /api/feedback?token=<FEEDBACK_ADMIN_TOKEN>
+//   - 토큰 미설정 시 404 (관리자 조회 비활성)
+//   - 응답: { stats: {count, avg, distribution}, items: [...] }
+//
+// 디스크 저장 실패는 in-memory 응답을 막지 않음 (best-effort).
+const FEEDBACK_RING_MAX = 200;
+const FEEDBACK_LOG_FILE = process.env.FEEDBACK_LOG_FILE
+  || path.join(__dirname, "data", "feedback.jsonl");
+const FEEDBACK_ADMIN_TOKEN = process.env.FEEDBACK_ADMIN_TOKEN || "";
+const feedbackRing = [];
+const feedbackRateLimiter = createRateLimiter({
+  windowMs: Number(process.env.KDSIS_FEEDBACK_RATE_WINDOW_MS || 60_000),
+  max: Number(process.env.KDSIS_FEEDBACK_RATE_LIMIT || 10),
+});
+
+function _hashIp(ip) {
+  return require("crypto")
+    .createHash("sha256")
+    .update(String(ip || ""))
+    .digest("hex")
+    .slice(0, 12);
+}
+
+app.post("/api/feedback", (req, res) => {
+  const ip = _clientIp(req);
+  const rl = feedbackRateLimiter.check(ip);
+  if (!rl.allowed) {
+    res.set("Retry-After", String(Math.ceil((rl.retryAfterMs || 60_000) / 1000)));
+    return res.status(429).json({ error: "잠시 후 다시 시도해 주세요." });
+  }
+  const body = req.body || {};
+  const rating = parseInt(body.rating, 10);
+  if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: "rating 은 1~5 사이의 정수여야 합니다." });
+  }
+  let comment = body.comment == null ? "" : String(body.comment);
+  if (comment.length > 800) comment = comment.slice(0, 800);
+  const entry = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    ts: new Date().toISOString(),
+    rating,
+    comment,
+    ipHash: _hashIp(ip),
+    ua: String(req.headers["user-agent"] || "").slice(0, 200),
+  };
+  feedbackRing.push(entry);
+  if (feedbackRing.length > FEEDBACK_RING_MAX) {
+    feedbackRing.splice(0, feedbackRing.length - FEEDBACK_RING_MAX);
+  }
+  fs.promises
+    .mkdir(path.dirname(FEEDBACK_LOG_FILE), { recursive: true })
+    .then(() => fs.promises.appendFile(FEEDBACK_LOG_FILE, JSON.stringify(entry) + "\n", "utf-8"))
+    .catch((err) => console.warn("[feedback] log append failed:", err.message));
+  res.json({ ok: true, id: entry.id });
+});
+
+app.get("/api/feedback", (req, res) => {
+  if (!FEEDBACK_ADMIN_TOKEN) return res.status(404).json({ error: "Not found" });
+  if (req.query.token !== FEEDBACK_ADMIN_TOKEN) return res.status(401).json({ error: "Unauthorized" });
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  const items = feedbackRing.slice(-limit).reverse();
+  const dist = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  let sum = 0;
+  for (const e of feedbackRing) { dist[e.rating] = (dist[e.rating] || 0) + 1; sum += e.rating; }
+  const stats = {
+    count: feedbackRing.length,
+    avg: feedbackRing.length ? Math.round((sum / feedbackRing.length) * 10) / 10 : 0,
+    distribution: dist,
+  };
+  res.json({ ok: true, stats, items });
 });
 
 // ── 첨부 프록시 API ───────────────────────────────────────

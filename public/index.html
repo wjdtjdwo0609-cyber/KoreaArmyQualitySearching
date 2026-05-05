@@ -5,62 +5,76 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light dark">
   <title>국방 AI 어시스턴트 — KDSIS 실시간 검색</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="stylesheet" as="style" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
+  <link rel="stylesheet" as="style" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
   <script>
-    // No-flash theme init: apply BEFORE first paint
+    // No-flash theme + sidebar collapse init: apply BEFORE first paint
     (function () {
+      var root = document.documentElement;
       try {
         var stored = localStorage.getItem("kdsis-theme");
         var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
         var theme = stored || (prefersDark ? "dark" : "light");
-        document.documentElement.setAttribute("data-theme", theme);
+        root.setAttribute("data-theme", theme);
       } catch (e) {
-        document.documentElement.setAttribute("data-theme", "light");
+        root.setAttribute("data-theme", "light");
       }
+      try {
+        // Default to collapsed on desktop ("more reading room") unless the
+        // user explicitly expanded before. Mobile is unaffected — the sidebar
+        // is a slide-in sheet there.
+        var sb = localStorage.getItem("kdsis-sb-collapsed");
+        if (sb === "1" || sb === null) root.classList.add("sb-collapsed");
+      } catch (e) {}
     })();
   </script>
   <style>
     :root {
-      /* Brand */
-      --primary:#2563EB;--primary-light:#3B82F6;--primary-dark:#1D4ED8;
-      --green:#10B981;--green-dark:#059669;
-      --error:#EF4444;--warning:#F59E0B;
-      /* Light surfaces (default) */
-      --bg:#F7F7F8;--surface:#FFF;--surface-alt:#F0F0F1;--surface-hover:#E8E8EA;
-      --text:#1A1A2E;--muted:#6B7280;--inverse:#FFF;--border:#E5E7EB;
-      /* Translucent overlays — must adapt per theme */
-      --primary-tint:rgba(37,99,235,.08);
-      --primary-tint-strong:rgba(37,99,235,.10);
-      --primary-row:rgba(37,99,235,.04);
-      --green-tint:rgba(16,185,129,.10);
-      --green-badge:rgba(16,185,129,.12);
-      --warning-tint:rgba(245,158,11,.12);
-      --error-tint:rgba(239,68,68,.06);
-      --error-tint-strong:rgba(239,68,68,.12);
-      --error-border:rgba(239,68,68,.15);
-      --neutral-tint:rgba(107,114,128,.12);
-      /* Type & shape */
-      --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;
-      --mono:"SF Mono","Consolas","Noto Sans KR",monospace;
+      /* ── Quiet Blue palette ─────────────────────────────────
+         시안의 QB 토큰을 1:1 매핑. status / tint 변수는 기존 클래스 호환을
+         위해 별칭으로도 유지. */
+      --primary:#2E5BAA;--primary-light:#244A8E;--primary-dark:#1B3A73;
+      --primary-soft:#E8EFF8;--primary-soft-text:#244A8E;
+      --green:#15803D;--green-dark:#15803D;
+      --error:#B91C1C;--warning:#B45309;
+      /* Light surfaces */
+      --bg:#F4F6F8;--surface:#FFFFFF;--surface-alt:#EDF0F4;--surface-hover:#F8FAFB;
+      --text:#1F2937;--muted:#6B7280;--text-tertiary:#9CA3AF;
+      --inverse:#FFFFFF;--border:#E1E5EA;--border-strong:#C7CDD4;--divider:#EAEDF1;
+      /* Tints — flat single colors for crisper QB feel (legacy aliases kept) */
+      --primary-tint:#E8EFF8;
+      --primary-tint-strong:#DCE5F4;
+      --primary-row:#F1F5FB;
+      --green-tint:#DCFCE7;--green-badge:#DCFCE7;
+      --warning-tint:#FEF3C7;
+      --error-tint:#FEE2E2;--error-tint-strong:#FEE2E2;--error-border:#FCA5A5;
+      --neutral-tint:#F5F5F5;
+      /* Type */
+      --font:'Pretendard Variable','Pretendard',-apple-system,BlinkMacSystemFont,system-ui,'Apple SD Gothic Neo','Noto Sans KR',sans-serif;
+      --mono:'SF Mono','JetBrains Mono','Consolas','Noto Sans KR',monospace;
+      /* Shape */
       --r-sm:8px;--r-md:12px;--r-lg:16px;--r-full:9999px;
-      --sh-sm:0 1px 2px rgba(0,0,0,.05);--sh-md:0 4px 12px rgba(0,0,0,.08);
+      --sh-sm:0 1px 2px rgba(15,23,42,.04);--sh-md:0 4px 16px rgba(15,23,42,.08);
+      --ring:0 0 0 3px var(--primary-soft);
       color-scheme:light;
     }
     [data-theme="dark"] {
-      --bg:#0B1120;--surface:#111827;--surface-alt:#1F2937;--surface-hover:#374151;
-      --text:#F1F5F9;--muted:#9CA3AF;--inverse:#FFF;--border:#1F2937;
-      --primary:#3B82F6;--primary-light:#60A5FA;--primary-dark:#2563EB;
-      --green-dark:#34D399;
-      --primary-tint:rgba(59,130,246,.16);
-      --primary-tint-strong:rgba(59,130,246,.22);
-      --primary-row:rgba(59,130,246,.08);
-      --green-tint:rgba(16,185,129,.16);
-      --green-badge:rgba(16,185,129,.18);
+      --bg:#0F172A;--surface:#1E293B;--surface-alt:#243047;--surface-hover:#2A3756;
+      --text:#F1F5F9;--muted:#94A3B8;--text-tertiary:#64748B;
+      --inverse:#FFFFFF;--border:#1F2937;--border-strong:#374151;--divider:#1F2937;
+      --primary:#6B95E0;--primary-light:#A8C0EC;--primary-dark:#3F62A6;
+      --primary-soft:rgba(107,149,224,.16);--primary-soft-text:#A8C0EC;
+      --green:#22C55E;--green-dark:#22C55E;
+      --primary-tint:rgba(107,149,224,.18);
+      --primary-tint-strong:rgba(107,149,224,.26);
+      --primary-row:rgba(107,149,224,.10);
+      --green-tint:rgba(34,197,94,.16);--green-badge:rgba(34,197,94,.18);
       --warning-tint:rgba(245,158,11,.18);
-      --error-tint:rgba(239,68,68,.12);
-      --error-tint-strong:rgba(239,68,68,.20);
-      --error-border:rgba(239,68,68,.25);
-      --neutral-tint:rgba(156,163,175,.18);
+      --error-tint:rgba(239,68,68,.12);--error-tint-strong:rgba(239,68,68,.20);--error-border:rgba(239,68,68,.25);
+      --neutral-tint:rgba(148,163,184,.18);
       --sh-sm:0 1px 2px rgba(0,0,0,.4);--sh-md:0 6px 16px rgba(0,0,0,.45);
+      --ring:0 0 0 3px var(--primary-soft);
       color-scheme:dark;
     }
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -108,8 +122,13 @@
     .dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
 
     /* Search status */
-    .search-status{display:flex;align-items:center;gap:.5rem;font-size:.8125rem;color:var(--primary);margin-bottom:.75rem;font-weight:500}
+    .search-status{display:flex;align-items:center;gap:.5rem;font-size:.8125rem;color:var(--primary);margin-bottom:.5rem;font-weight:500;letter-spacing:-.01em}
     .search-status .spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
+    /* 시안 Screen 2 — 한 줄 상태 아래 미세 진행 바 + mono 안내 한 줄 */
+    .search-progress{margin-top:.5rem;height:2px;border-radius:1px;background:var(--surface-alt);overflow:hidden;position:relative}
+    .search-progress::before{content:"";position:absolute;left:-40%;top:0;bottom:0;width:40%;background:var(--primary);border-radius:1px;animation:searchProgressSlide 1.4s ease-in-out infinite}
+    @keyframes searchProgressSlide{0%{left:-40%}100%{left:100%}}
+    .search-time{margin-top:.5rem;font-family:var(--mono);font-size:.6875rem;color:var(--text-tertiary);letter-spacing:0}
     .search-params{display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.75rem}
     .param-tag{font-size:.75rem;padding:3px 10px;background:var(--primary-tint);color:var(--primary);border-radius:var(--r-full);font-weight:500}
     .batch-query-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;padding:.5rem .75rem;background:var(--primary-tint);border-radius:var(--r-md);font-size:.8125rem;font-weight:600;color:var(--primary)}
@@ -165,19 +184,24 @@
     .pgn-size{font-size:.75rem;padding:3px 6px;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:var(--r-sm);font-family:var(--font);cursor:pointer}
 
     /* Cards */
-    .cards{display:grid;gap:.75rem}
-    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:.875rem 1rem;transition:all .15s}
+    .cards{display:grid;gap:.625rem}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:1rem;transition:transform .12s ease,border-color .15s,box-shadow .15s}
     .card:hover{border-color:var(--primary-light);box-shadow:var(--sh-sm)}
+    .card:active{transform:scale(.985)}
+    .card.selected{border-color:var(--primary);box-shadow:var(--ring)}
     .card-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.375rem;flex-wrap:wrap}
-    .spec-no{font-family:var(--mono);font-size:.8125rem;font-weight:600;color:var(--primary);background:var(--primary-tint);padding:3px 8px;border-radius:var(--r-sm)}
+    .spec-no{font-family:var(--mono);font-size:.75rem;font-weight:500;color:var(--primary-soft-text);background:var(--primary-soft);padding:3px 8px;border-radius:var(--r-sm);letter-spacing:.02em}
     .spec-kind{font-size:.75rem;color:var(--muted);padding:3px 8px;background:var(--surface-alt);border-radius:var(--r-sm)}
-    .status-badge{font-size:.75rem;font-weight:600;padding:3px 10px;border-radius:var(--r-full);margin-left:auto}
-    .status-active{background:var(--green-badge);color:var(--green-dark)}
+    .status-badge{font-size:.75rem;font-weight:500;padding:3px 10px;border-radius:var(--r-full);margin-left:auto;letter-spacing:-.01em;border:1px solid transparent}
+    .status-active{background:var(--green-badge);color:var(--green-dark);border-color:#86EFAC}
+    [data-theme="dark"] .status-active{border-color:transparent}
     .status-inactive{background:var(--neutral-tint);color:var(--muted)}
-    .status-transition{background:var(--warning-tint);color:var(--warning)}
-    .status-abolished{background:var(--error-tint-strong);color:var(--error)}
-    .card-title{font-size:.9375rem;font-weight:600;color:var(--text);margin-bottom:.5rem;line-height:1.4}
-    .card-meta{display:flex;flex-wrap:wrap;gap:.375rem .875rem;font-size:.8125rem;color:var(--muted);margin-bottom:.375rem}
+    .status-transition{background:var(--warning-tint);color:var(--warning);border-color:#FCD34D}
+    [data-theme="dark"] .status-transition{border-color:transparent}
+    .status-abolished{background:var(--error-tint-strong);color:var(--error);border-color:#FCA5A5}
+    [data-theme="dark"] .status-abolished{border-color:transparent}
+    .card-title{font-size:1rem;font-weight:600;color:var(--text);margin-bottom:.5rem;line-height:1.3;letter-spacing:-.01em}
+    .card-meta{display:flex;flex-wrap:wrap;gap:.375rem .875rem;font-size:.75rem;color:var(--muted);margin-bottom:.375rem;letter-spacing:-.01em}
     .card-meta .mi{display:inline-flex;align-items:center;gap:.25rem}
     .card-meta .mi strong{color:var(--text);font-weight:500}
     .card-dates{font-size:.8125rem;color:var(--muted);padding-top:.5rem;border-top:1px dashed var(--border);margin-top:.5rem}
@@ -240,17 +264,24 @@
     .err-extra{font-size:.8125rem;color:var(--muted);margin-top:.5rem}
     .err-extra code{font-family:var(--mono);background:var(--bg);padding:1px 5px;border-radius:3px;font-size:.75rem}
 
-    /* Welcome */
-    .welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;padding:2rem;animation:fadeUp .5s ease-out}
-    .welcome-icon{font-size:3.5rem;margin-bottom:1rem;animation:pulse 2s ease-in-out infinite}
-    .welcome h3{font-size:1.5rem;font-weight:700;margin-bottom:.375rem;background:linear-gradient(135deg,var(--primary),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-    .welcome p{color:var(--muted);margin-bottom:1.5rem;max-width:480px}
-    .welcome .badge{font-size:.75rem;padding:5px 14px;background:var(--green-tint);color:var(--green-dark);border-radius:var(--r-full);font-weight:600;margin-bottom:1rem}
-    .prompts{display:grid;grid-template-columns:repeat(2,1fr);gap:.75rem;width:100%;max-width:640px}
-    .prompt-card{display:flex;align-items:center;gap:.625rem;padding:.875rem 1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);cursor:pointer;font-family:var(--font);font-size:.875rem;color:var(--text);text-align:left;transition:all .15s;box-shadow:var(--sh-sm)}
-    .prompt-card:hover{transform:translateY(-2px);box-shadow:var(--sh-md);border-color:var(--primary-light)}
-    .prompt-card .pi{font-size:1.25rem;flex-shrink:0;width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:var(--r-sm)}
-    .sample-wrap{margin-top:2rem;width:100%;max-width:640px;display:flex;flex-direction:column;align-items:center;gap:.5rem}
+    /* Welcome — Quiet Blue hero */
+    .welcome{display:flex;flex-direction:column;align-items:center;min-height:60vh;text-align:center;padding:2rem 1.25rem;animation:fadeUp .5s ease-out;width:100%;max-width:560px;margin:0 auto}
+    .welcome-hero{display:flex;flex-direction:column;align-items:center;margin-top:.5rem;margin-bottom:1.75rem}
+    .welcome-hero-icon{width:64px;height:64px;border-radius:14px;background:var(--primary-soft);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--primary);margin-bottom:1rem}
+    .welcome-hero h3{font-size:1.375rem;font-weight:600;letter-spacing:-.01em;color:var(--text);line-height:1.3;margin-bottom:.5rem}
+    .welcome-hero p{color:var(--muted);font-size:.9375rem;letter-spacing:-.01em;line-height:1.6;font-weight:400;max-width:480px;margin:0}
+    .welcome .badge{font-size:.75rem;padding:5px 14px;background:var(--green-badge);color:var(--green-dark);border-radius:var(--r-full);font-weight:600;margin-bottom:1rem}
+    .prompts-label{font-size:.75rem;font-weight:500;letter-spacing:-.01em;color:var(--muted);align-self:flex-start;padding-left:.25rem;margin-bottom:.5rem}
+    .prompts{display:flex;flex-direction:column;width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden}
+    .prompt-card{display:flex;align-items:center;gap:.625rem;padding:.875rem 1rem;background:transparent;border:none;border-bottom:1px solid var(--divider);cursor:pointer;font-family:var(--font);font-size:.875rem;color:var(--text);text-align:left;transition:background-color .12s;width:100%}
+    .prompt-card:last-child{border-bottom:none}
+    .prompt-card:hover{background:var(--surface-hover)}
+    .prompt-card .pi{font-size:1rem;flex-shrink:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:var(--surface-alt);border-radius:var(--r-sm);color:var(--muted)}
+    .prompt-card-text{flex:1;letter-spacing:-.01em;font-weight:400}
+    .prompt-card-chev{flex-shrink:0;color:var(--text-tertiary);transition:transform .12s,color .12s}
+    .prompt-card:hover .prompt-card-chev{color:var(--primary);transform:translateX(2px)}
+    .welcome-footnote{margin-top:1rem;align-self:flex-start;padding-left:.25rem;font-size:.75rem;color:var(--text-tertiary);letter-spacing:-.01em;line-height:1.5}
+    .sample-wrap{margin-top:1.5rem;width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:.5rem}
     .sample-label{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
 
     /* Input */
@@ -270,8 +301,8 @@
     .recent-item:hover .ri-remove,.recent-item.active .ri-remove{opacity:1}
     .recent-item .ri-remove:hover{color:var(--error);background:var(--error-tint)}
     .recent-empty{padding:.875rem;text-align:center;font-size:.8125rem;color:var(--muted)}
-    .input-form{display:flex;align-items:flex-end;gap:.5rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:.625rem .625rem .625rem 1rem;box-shadow:var(--sh-md);transition:border-color .15s,box-shadow .15s}
-    .input-form:focus-within{border-color:var(--primary-light);box-shadow:var(--sh-md),0 0 0 3px var(--primary-tint-strong)}
+    .input-form{display:flex;align-items:flex-end;gap:.5rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:.625rem .625rem .625rem 1rem;box-shadow:var(--sh-sm);transition:border-color .15s,box-shadow .15s}
+    .input-form:focus-within{border-color:var(--primary);box-shadow:var(--ring)}
     .input-form textarea{flex:1;border:none;outline:none;resize:none;font-family:var(--font);font-size:.9375rem;color:var(--text);background:transparent;line-height:1.5;max-height:120px;padding:.375rem 0;min-height:1.5rem}
     .input-form textarea::placeholder{color:var(--muted)}
     .send-btn{flex-shrink:0;width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:var(--primary);border:none;border-radius:var(--r-sm);color:var(--inverse);cursor:pointer;font-size:1.0625rem;transition:all .15s}
@@ -413,6 +444,159 @@
       details.card-more dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem .5rem;margin-top:.25rem;border-top:1px solid #ccc;padding-top:.25rem}
       a,button{color:#000 !important;text-decoration:none}
     }
+
+    /* ── Sidebar (mobile sheet + desktop slide) ────────────────
+       햄버거 → 우측 슬라이드 시트. 최근 검색·저장·피드백 진입점 통합. */
+    .sidebar-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.4);backdrop-filter:blur(2px);z-index:8500;animation:fadeIn .18s ease-out}
+    .sidebar-backdrop[hidden]{display:none}
+    .sidebar{position:fixed;top:0;right:0;bottom:0;width:min(320px,86vw);background:#FAFAF8;border-left:1px solid var(--divider);z-index:8600;display:flex;flex-direction:column;font-family:var(--font);box-shadow:-8px 0 24px rgba(15,23,42,.08);transform:translateX(100%);transition:transform .26s cubic-bezier(.32,.72,0,1)}
+    [data-theme="dark"] .sidebar{background:var(--surface)}
+    .sidebar.open{transform:translateX(0)}
+    .sidebar[hidden]{display:none}
+    .sb-head{padding:14px 16px 12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--divider)}
+    .sb-mark{width:28px;height:28px;border-radius:6px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:-.02em;flex-shrink:0}
+    .sb-brand{flex:1;min-width:0}
+    .sb-brand-title{font-size:13px;font-weight:600;color:var(--text);letter-spacing:-.01em}
+    .sb-brand-sub{font-size:11px;color:var(--muted);letter-spacing:-.01em;margin-top:1px}
+    .sb-online{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
+    .sb-section{padding:12px 12px 4px}
+    .sb-newchat{width:100%;height:36px;border-radius:8px;background:var(--surface);border:1px solid var(--border-strong);color:var(--text);font-family:var(--font);font-size:13px;font-weight:500;letter-spacing:-.01em;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+    .sb-newchat:hover{background:var(--surface-hover);border-color:var(--primary-light)}
+    .sb-search-wrap{padding:0 12px 8px}
+    .sb-search{height:32px;border-radius:8px;background:var(--surface);border:1px solid var(--border);display:flex;align-items:center;gap:6px;padding:0 10px}
+    .sb-search input{flex:1;border:none;outline:none;background:transparent;font-family:var(--font);font-size:12px;color:var(--text);letter-spacing:-.01em;min-width:0}
+    .sb-list{flex:1;overflow-y:auto;padding:4px 8px 12px}
+    .sb-listhead{font-family:var(--font);font-size:11px;font-weight:600;color:var(--text-tertiary);letter-spacing:.04em;text-transform:uppercase;padding:8px 8px 6px}
+    .sb-item{width:100%;text-align:left;padding:8px 10px;border-radius:6px;background:transparent;border:none;cursor:pointer;display:block;margin-bottom:1px;font-family:var(--font)}
+    .sb-item:hover{background:var(--surface-hover)}
+    .sb-item.active{background:var(--primary-soft)}
+    .sb-item.active .sb-item-title{color:var(--primary-soft-text);font-weight:500}
+    .sb-item-title{font-size:12.5px;color:var(--text);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .sb-item-meta{font-size:11px;color:var(--text-tertiary);letter-spacing:-.01em;margin-top:2px}
+    .sb-saved-row{display:flex;align-items:center;gap:8px;padding:8px 10px}
+    .sb-saved-row svg{flex-shrink:0;color:var(--text-tertiary)}
+    .sb-empty{padding:8px 10px;font-size:12px;color:var(--text-tertiary);letter-spacing:-.01em}
+    .sb-foot{border-top:1px solid var(--divider);padding:10px;display:flex;align-items:center;gap:10px}
+    .sb-avatar{width:32px;height:32px;border-radius:50%;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;font-weight:600;color:var(--muted);flex-shrink:0;letter-spacing:-.02em}
+    .sb-foot-meta{flex:1;min-width:0}
+    .sb-foot-name{font-size:12px;font-weight:500;color:var(--text);letter-spacing:-.01em}
+    .sb-foot-ver{font-size:10.5px;color:var(--text-tertiary);letter-spacing:-.01em}
+    .sb-fb-btn{width:32px;height:32px;border-radius:6px;background:transparent;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted);flex-shrink:0}
+    .sb-fb-btn:hover{color:var(--primary);background:var(--surface-hover)}
+
+    /* ── Feedback modal ────────────────────────────────────────
+       별점 + 익명 댓글. 제출 시 POST /api/feedback. */
+    .fb-form{display:flex;flex-direction:column;gap:14px}
+    .fb-label{font-size:12px;font-weight:500;color:var(--muted);letter-spacing:-.01em}
+    .fb-stars{display:flex;gap:6px;align-items:center}
+    .fb-star{width:36px;height:36px;border:none;background:transparent;cursor:pointer;color:var(--text-tertiary);padding:0;display:flex;align-items:center;justify-content:center;border-radius:8px;transition:color .12s,transform .12s,background-color .12s}
+    .fb-star:hover{background:var(--surface-hover);color:var(--warning)}
+    .fb-star.fb-on,.fb-star.fb-hover{color:#F59E0B}
+    .fb-star:active{transform:scale(.92)}
+    .fb-star-readout{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-left:8px;letter-spacing:0}
+    .fb-textarea{width:100%;min-height:96px;max-height:260px;resize:vertical;padding:.625rem .75rem;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:var(--r-sm);font-family:var(--font);font-size:13.5px;line-height:1.6;letter-spacing:-.01em}
+    .fb-textarea:focus{outline:none;border-color:var(--primary);box-shadow:var(--ring)}
+    .fb-textarea::placeholder{color:var(--text-tertiary)}
+    .fb-counter{font-family:var(--mono);font-size:11px;color:var(--text-tertiary);text-align:right;margin-top:-6px}
+    .fb-actions{display:flex;gap:8px;padding-top:6px}
+    .fb-btn{flex:1;height:38px;border-radius:8px;font-family:var(--font);font-size:13px;font-weight:500;letter-spacing:-.01em;cursor:pointer;transition:background-color .12s,opacity .12s}
+    .fb-btn-cancel{background:var(--surface);border:1px solid var(--border-strong);color:var(--text)}
+    .fb-btn-cancel:hover{background:var(--surface-hover)}
+    .fb-btn-submit{flex:2;background:var(--primary);border:none;color:#fff}
+    .fb-btn-submit:hover:not(:disabled){background:var(--primary-light)}
+    .fb-btn-submit:disabled{opacity:.55;cursor:not-allowed}
+    .fb-note{font-size:11.5px;color:var(--text-tertiary);letter-spacing:-.01em;line-height:1.5;display:flex;gap:6px;align-items:flex-start}
+    .fb-note svg{flex-shrink:0;margin-top:2px;color:var(--text-tertiary)}
+
+    /* Header hamburger */
+    .icon-btn.hamburger{order:99}
+
+    /* ── Desktop dock (≥ 1024px) ───────────────────────────────
+       모바일: 우측에서 슬라이드 인하는 시트.
+       데스크톱: 좌측에 고정된 collapsible 사이드바. 햄버거 버튼이 폭을
+       토글한다. 디테일은 우측 패널이 아니라 화면 중앙 큰 모달로 노출 —
+       작은 우측 패널보다 가독성·복사 편의가 우월하다는 사용자 결정. */
+    @media (min-width: 1024px) {
+      .sidebar-backdrop{display:none !important}
+      .sidebar{position:fixed;top:0;left:0;right:auto;bottom:0;width:280px;
+        transform:none !important;transition:width .22s ease,padding .22s ease;
+        box-shadow:none;border-left:none;border-right:1px solid var(--divider)}
+      .sidebar[hidden]{display:flex !important}
+      .sidebar.collapsed{width:56px}
+      .sidebar.collapsed .sb-brand,
+      .sidebar.collapsed .sb-online,
+      .sidebar.collapsed .sb-search-wrap,
+      .sidebar.collapsed .sb-listhead,
+      .sidebar.collapsed .sb-item-meta,
+      .sidebar.collapsed .sb-item-title,
+      .sidebar.collapsed .sb-empty,
+      .sidebar.collapsed .sb-saved-row span,
+      .sidebar.collapsed .sb-foot-meta,
+      .sidebar.collapsed .sb-newchat span,
+      .sidebar.collapsed #sidebarCloseBtn{display:none}
+      .sidebar.collapsed .sb-head{padding:14px 6px 12px;justify-content:center;gap:0}
+      .sidebar.collapsed .sb-section,
+      .sidebar.collapsed .sb-search-wrap,
+      .sidebar.collapsed .sb-list{padding-left:6px;padding-right:6px}
+      .sidebar.collapsed .sb-newchat{padding:8px 0;gap:0;justify-content:center}
+      .sidebar.collapsed .sb-item{padding:8px 6px;text-align:center}
+      .sidebar.collapsed .sb-foot{padding:10px 6px;justify-content:center;gap:0}
+      .app{padding-left:280px;transition:padding-left .22s ease}
+      html.sb-collapsed .app{padding-left:56px}
+      /* 햄버거 버튼은 데스크톱에서 collapse 토글 — 시각적 hint로 회전 */
+      .icon-btn.hamburger svg{transition:transform .22s ease}
+      html.sb-collapsed .icon-btn.hamburger svg{transform:rotate(90deg)}
+      /* 입력 영역도 사이드바 폭만큼 안쪽 정렬되도록 */
+      .input-area{max-width:calc(900px + 4rem)}
+    }
+
+    /* ── Detail modal (큰 모달, 시안 Screen 5) ──────────────────
+       카드 본체 클릭 시 화면 중앙에 큰 모달로 펼침. 우측 좁은 패널보다
+       복사·읽기·다운로드가 모두 한 화면에 정리된다. */
+    .modal-panel.detail-panel{max-width:720px}
+    .dm-head{display:flex;flex-direction:column;gap:.5rem;padding:1.125rem 1.25rem 1rem;border-bottom:1px solid var(--divider);background:var(--surface);border-top-left-radius:var(--r-lg);border-top-right-radius:var(--r-lg)}
+    .dm-headrow{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+    .dm-spec-no{font-family:var(--mono);font-size:.8125rem;font-weight:500;color:var(--primary-soft-text);background:var(--primary-soft);padding:3px 9px;border-radius:var(--r-sm);letter-spacing:.02em;user-select:text}
+    .dm-title{font-family:var(--font);font-size:1.25rem;font-weight:600;color:var(--text);letter-spacing:-.01em;line-height:1.3;user-select:text}
+    .dm-actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.25rem}
+    .dm-action{display:inline-flex;align-items:center;gap:.25rem;padding:.375rem .625rem;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--surface);color:var(--muted);font-family:var(--font);font-size:.75rem;font-weight:500;letter-spacing:-.01em;cursor:pointer;transition:background-color .12s,color .12s,border-color .12s}
+    .dm-action:hover{color:var(--text);border-color:var(--border-strong);background:var(--surface-hover)}
+    .dm-action.copied{color:var(--primary-soft-text);background:var(--primary-soft);border-color:var(--primary-soft)}
+    .dm-action.primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+    .dm-action.primary:hover{background:var(--primary-light);color:#fff}
+    .dm-section{padding:1rem 1rem 0}
+    .dm-section + .dm-section{padding-top:1rem}
+    .dm-section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;padding-left:.25rem}
+    .dm-section-label{font-family:var(--font);font-size:.75rem;font-weight:500;color:var(--muted);letter-spacing:-.01em}
+    .dm-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden}
+    .dm-field{display:flex;align-items:flex-start;gap:.625rem;padding:.625rem .875rem;border-bottom:1px solid var(--divider)}
+    .dm-field:last-child{border-bottom:none}
+    .dm-field-label{width:104px;flex-shrink:0;font-family:var(--font);font-size:.75rem;color:var(--muted);font-weight:500;letter-spacing:-.01em;padding-top:2px}
+    .dm-field-value{flex:1;font-family:var(--font);font-size:.84375rem;color:var(--text);letter-spacing:-.01em;line-height:1.5;user-select:text;word-break:break-word}
+    .dm-field-value.mono{font-family:var(--mono);letter-spacing:.02em;font-weight:500}
+    .dm-field-copy{flex-shrink:0}
+    .dm-foot{padding:.625rem 1rem 1rem;border-top:1px solid var(--divider);background:var(--surface);display:flex;align-items:flex-start;gap:.5rem;font-family:var(--font);font-size:.6875rem;color:var(--text-tertiary);letter-spacing:-.01em;line-height:1.5;border-bottom-left-radius:var(--r-lg);border-bottom-right-radius:var(--r-lg)}
+    .dm-foot svg{flex-shrink:0;margin-top:1px;color:var(--text-tertiary)}
+    .dm-attach-empty{padding:.875rem;text-align:center;color:var(--muted);font-size:.8125rem}
+    .dm-attach-list{display:flex;flex-direction:column}
+    .dm-attach-item{display:flex;align-items:center;gap:.75rem;padding:.625rem .875rem;border-bottom:1px solid var(--divider);background:var(--surface)}
+    .dm-attach-item:last-child{border-bottom:none}
+    .dm-attach-icon{width:36px;height:36px;border-radius:var(--r-sm);background:var(--surface-alt);color:var(--muted);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:var(--font);font-size:.625rem;font-weight:600;letter-spacing:.04em;flex-shrink:0}
+    .dm-attach-meta{flex:1;min-width:0}
+    .dm-attach-name{font-family:var(--font);font-size:.84375rem;font-weight:500;color:var(--text);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .dm-attach-sub{font-family:var(--font);font-size:.75rem;color:var(--muted);margin-top:2px;letter-spacing:-.01em}
+    .dm-attach-dl{flex-shrink:0;width:32px;height:32px;border-radius:var(--r-sm);background:var(--surface);border:1px solid var(--border-strong);color:var(--muted);display:flex;align-items:center;justify-content:center;cursor:pointer;text-decoration:none}
+    .dm-attach-dl:hover{color:var(--primary);border-color:var(--primary-light)}
+    .dm-loading{padding:.875rem;text-align:center;color:var(--muted);font-size:.8125rem}
+    .dm-error{padding:.625rem .875rem;color:var(--error);font-size:.8125rem;background:var(--error-tint);border:1px solid var(--error-border);border-radius:var(--r-sm);margin:.5rem .25rem}
+    /* 카드 본체 클릭 가능 hint */
+    .card.clickable{cursor:pointer}
+    .card.clickable .card-meta{margin-bottom:.25rem}
+    .card-tap-hint{margin-top:.5rem;padding-top:.625rem;border-top:1px solid var(--divider);display:flex;align-items:center;justify-content:space-between;gap:.5rem;font-family:var(--font);font-size:.75rem;color:var(--primary-soft-text);font-weight:500;letter-spacing:-.01em}
+    .card-tap-hint .ct-chev{transition:transform .12s,color .12s}
+    .card.clickable:hover .ct-chev{transform:translateX(2px)}
+    /* attach-block 다음에 오는 tap-hint 는 시각적 분리가 이미 있어 border 제거 */
+    .attach-block + .card-tap-hint{border-top:none;padding-top:.25rem}
   </style>
 </head>
 <body>
@@ -433,17 +617,32 @@
       <button class="reset-btn" id="resetBtn" type="button" aria-label="새 대화 시작" title="새 대화 시작 (Ctrl+K)">
         <span aria-hidden="true">＋</span><span>새 대화</span>
       </button>
+      <button class="icon-btn hamburger" id="menuBtn" type="button" aria-label="메뉴 열기" aria-controls="sidebar" aria-expanded="false" title="메뉴">
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 4h10M2 7h10M2 10h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
     </header>
 
     <main class="messages" id="messages" role="log" aria-live="polite" aria-label="대화 기록" aria-relevant="additions" tabindex="-1">
       <div class="welcome" id="welcome">
-        <div class="prompts" id="prompts" role="list" aria-label="추천 검색어">
-          <button class="prompt-card" type="button" role="listitem" data-q="규격번호 1005-0409 (구경50미리)" data-direct-params='{"규격번호":"1005-0409"}'><span class="pi" aria-hidden="true">🔍</span>규격번호 1005-0409 (구경50미리)</button>
-          <button class="prompt-card" type="button" role="listitem" data-q="K2 소총 · 활성 규격" data-direct-params='{"적용장비명":"K2 소총","규격상태":"활성"}'><span class="pi" aria-hidden="true">🎯</span>K2 소총 · 활성 규격</button>
-          <button class="prompt-card" type="button" role="listitem" data-q="K9 자주포 · 활성 규격" data-direct-params='{"적용장비명":"K9 자주포","규격상태":"활성"}'><span class="pi" aria-hidden="true">⚙️</span>K9 자주포 · 활성 규격</button>
-          <button class="prompt-card" type="button" role="listitem" data-q="방위사업청 제정 · KDS · 활성" data-direct-params='{"제정기관":"방위사업청","규격종류":"KDS (국방/표준)","규격상태":"활성"}'><span class="pi" aria-hidden="true">🏛️</span>방위사업청 제정 · KDS · 활성</button>
-          <button class="prompt-card" type="button" role="listitem" data-q="국방기술품질원 제정 · 활성 규격" data-direct-params='{"제정기관":"국방기술품질원","규격상태":"활성"}'><span class="pi" aria-hidden="true">📋</span>국방기술품질원 제정 · 활성 규격</button>
+        <div class="welcome-hero">
+          <div class="welcome-hero-icon" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+              <circle cx="12" cy="12" r="7" stroke="currentColor" stroke-width="2"/>
+              <path d="M17.5 17.5l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3>무엇을 찾고 계신가요?</h3>
+          <p>자연어로 물어보면 KDSIS에서<br>실시간으로 규격 정보를 조회합니다.</p>
         </div>
+        <div class="prompts-label">예시 질문</div>
+        <div class="prompts" id="prompts" role="list" aria-label="추천 검색어">
+          <button class="prompt-card" type="button" role="listitem" data-q="규격번호 1005-0409 (구경50미리)" data-direct-params='{"규격번호":"1005-0409"}'><span class="pi" aria-hidden="true">🔍</span><span class="prompt-card-text">규격번호 1005-0409 (구경50미리)</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="prompt-card" type="button" role="listitem" data-q="K2 소총 · 활성 규격" data-direct-params='{"적용장비명":"K2 소총","규격상태":"활성"}'><span class="pi" aria-hidden="true">🎯</span><span class="prompt-card-text">K2 소총 · 활성 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="prompt-card" type="button" role="listitem" data-q="K9 자주포 · 활성 규격" data-direct-params='{"적용장비명":"K9 자주포","규격상태":"활성"}'><span class="pi" aria-hidden="true">⚙️</span><span class="prompt-card-text">K9 자주포 · 활성 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="prompt-card" type="button" role="listitem" data-q="방위사업청 제정 · KDS · 활성" data-direct-params='{"제정기관":"방위사업청","규격종류":"KDS (국방/표준)","규격상태":"활성"}'><span class="pi" aria-hidden="true">🏛️</span><span class="prompt-card-text">방위사업청 제정 · KDS · 활성</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="prompt-card" type="button" role="listitem" data-q="국방기술품질원 제정 · 활성 규격" data-direct-params='{"제정기관":"국방기술품질원","규격상태":"활성"}'><span class="pi" aria-hidden="true">📋</span><span class="prompt-card-text">국방기술품질원 제정 · 활성 규격</span><svg class="prompt-card-chev" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        <div class="welcome-footnote">데이터는 저장하지 않으며 매 요청마다 KDSIS를 실시간 조회합니다.</div>
       </div>
     </main>
 
@@ -464,6 +663,163 @@
   <button type="button" class="jump-bottom" id="jumpBottom" hidden aria-label="최신 메시지로 이동">↓ 최신</button>
 
   <div class="toasts" id="toasts" role="region" aria-label="알림" aria-live="polite"></div>
+
+  <!-- Sidebar — slide-in sheet (mobile + desktop) -->
+  <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
+  <aside class="sidebar" id="sidebar" role="dialog" aria-modal="true" aria-labelledby="sbBrandTitle" hidden>
+    <div class="sb-head">
+      <div class="sb-mark" aria-hidden="true">K</div>
+      <div class="sb-brand">
+        <div class="sb-brand-title" id="sbBrandTitle">국방 AI</div>
+        <div class="sb-brand-sub">KDSIS 실시간 검색</div>
+      </div>
+      <span class="sb-online" title="온라인" aria-label="온라인"></span>
+      <button class="icon-btn" type="button" id="sidebarCloseBtn" aria-label="메뉴 닫기" style="margin-left:.25rem">
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sb-section">
+      <button class="sb-newchat" type="button" id="sbNewChatBtn">
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 2v8M2 6h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>새 대화</span>
+      </button>
+    </div>
+    <div class="sb-search-wrap">
+      <div class="sb-search">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true" style="color:var(--text-tertiary)">
+          <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        <input type="text" id="sbSearchInput" placeholder="대화 검색" aria-label="최근 대화 검색">
+      </div>
+    </div>
+    <div class="sb-list" id="sbList">
+      <div class="sb-listhead">최근</div>
+      <div id="sbRecentList"></div>
+      <div class="sb-listhead" style="padding-top:14px">저장한 항목</div>
+      <div id="sbSavedList">
+        <div class="sb-empty">저장한 검색이 없습니다</div>
+      </div>
+    </div>
+    <div class="sb-foot">
+      <div class="sb-avatar" aria-hidden="true">익명</div>
+      <div class="sb-foot-meta">
+        <div class="sb-foot-name">익명 사용자</div>
+        <div class="sb-foot-ver">v0.9.2 · 베타</div>
+      </div>
+      <button class="sb-fb-btn" type="button" id="sbFeedbackBtn" aria-label="개발자에게 한마디" title="개발자에게 한마디">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M3 4h10v6H7l-3 3v-3H3V4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Feedback modal -->
+  <div class="modal" id="feedbackModal" role="dialog" aria-modal="true" aria-labelledby="fbTitle" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-panel" role="document">
+      <header class="modal-head">
+        <h2 id="fbTitle">개발자에게 한마디</h2>
+        <button class="icon-btn" type="button" data-modal-close aria-label="닫기" title="닫기">✕</button>
+      </header>
+      <div class="modal-body">
+        <form class="fb-form" id="feedbackForm" novalidate>
+          <div>
+            <div class="fb-label">사용 만족도</div>
+            <div class="fb-stars" role="radiogroup" aria-labelledby="fbTitle" id="fbStars">
+              <button type="button" class="fb-star" data-val="1" role="radio" aria-checked="false" aria-label="별 1점"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.9 6.9L22 10l-5.5 5 1.6 7L12 18.3 5.9 22l1.6-7L2 10l7.1-1.1L12 2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/></svg></button>
+              <button type="button" class="fb-star" data-val="2" role="radio" aria-checked="false" aria-label="별 2점"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.9 6.9L22 10l-5.5 5 1.6 7L12 18.3 5.9 22l1.6-7L2 10l7.1-1.1L12 2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/></svg></button>
+              <button type="button" class="fb-star" data-val="3" role="radio" aria-checked="false" aria-label="별 3점"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.9 6.9L22 10l-5.5 5 1.6 7L12 18.3 5.9 22l1.6-7L2 10l7.1-1.1L12 2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/></svg></button>
+              <button type="button" class="fb-star" data-val="4" role="radio" aria-checked="false" aria-label="별 4점"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.9 6.9L22 10l-5.5 5 1.6 7L12 18.3 5.9 22l1.6-7L2 10l7.1-1.1L12 2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/></svg></button>
+              <button type="button" class="fb-star" data-val="5" role="radio" aria-checked="false" aria-label="별 5점"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.9 6.9L22 10l-5.5 5 1.6 7L12 18.3 5.9 22l1.6-7L2 10l7.1-1.1L12 2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/></svg></button>
+              <span class="fb-star-readout" id="fbStarReadout">미평가</span>
+            </div>
+          </div>
+          <div>
+            <label class="fb-label" for="fbComment">한마디 (선택, 익명)</label>
+            <textarea class="fb-textarea" id="fbComment" maxlength="800" placeholder="개선했으면 하는 점, 잘 작동하지 않는 부분, 또는 응원의 한마디"></textarea>
+            <div class="fb-counter"><span id="fbCounterNow">0</span> / 800</div>
+          </div>
+          <p class="fb-note">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.2"/>
+              <path d="M6 5v3M6 3.5v.1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+            <span>식별 가능한 개인정보(이름·전화·이메일)는 수집하지 않습니다. 별점만 보내도 좋습니다.</span>
+          </p>
+          <div class="fb-actions">
+            <button type="button" class="fb-btn fb-btn-cancel" data-modal-close>취소</button>
+            <button type="submit" class="fb-btn fb-btn-submit" id="fbSubmitBtn" disabled>피드백 보내기</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail modal — full info popup (시안 Screen 5) -->
+  <div class="modal" id="detailModal" role="dialog" aria-modal="true" aria-labelledby="dmTitle" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-panel detail-panel" role="document">
+      <header class="dm-head">
+        <div class="dm-headrow">
+          <span class="dm-spec-no" id="dmSpecNo"></span>
+          <span class="dm-status" id="dmStatus"></span>
+          <div style="flex:1"></div>
+          <button class="icon-btn" type="button" data-modal-close aria-label="닫기" title="닫기">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <h2 class="dm-title" id="dmTitle"></h2>
+        <div class="dm-actions">
+          <button type="button" class="dm-action primary" id="dmCopyAll">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><rect x="3.5" y="1" width="7.5" height="9" rx="1.2" stroke="currentColor" stroke-width="1.2" fill="none"/><rect x="1" y="2.5" width="7.5" height="9" rx="1.2" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+            <span>전체 복사</span>
+          </button>
+          <button type="button" class="dm-action" id="dmCopyJson">
+            <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6l3 3 5-7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+            <span>JSON</span>
+          </button>
+          <button type="button" class="dm-action" id="dmOpenKdsis">
+            <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M5 2H3a1 1 0 00-1 1v6a1 1 0 001 1h6a1 1 0 001-1V7M7 2h3v3M5 7l5-5" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>KDSIS에서 열기</span>
+          </button>
+          <button type="button" class="dm-action" id="dmDownloadAll" title="이 행의 첨부 + KDSIS 엑셀을 ZIP으로 묶어 받습니다">
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 1v9M3 7l4 4 4-4M2 13h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>전체 다운로드</span>
+          </button>
+        </div>
+      </header>
+      <div class="modal-body" style="padding:0">
+        <section class="dm-section">
+          <div class="dm-section-head">
+            <div class="dm-section-label">기본 정보</div>
+          </div>
+          <div class="dm-card" id="dmBasic"></div>
+        </section>
+        <section class="dm-section">
+          <div class="dm-section-head">
+            <div class="dm-section-label">전체 필드</div>
+          </div>
+          <div class="dm-card" id="dmAllFields"></div>
+        </section>
+        <section class="dm-section" style="padding-bottom:1rem">
+          <div class="dm-section-head">
+            <div class="dm-section-label">첨부파일</div>
+          </div>
+          <div class="dm-card" id="dmAttach">
+            <div class="dm-loading">첨부파일을 불러오는 중…</div>
+          </div>
+        </section>
+      </div>
+      <div class="dm-foot">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M6 1.5L7.4 4.4 10.5 4.9 8.3 7l.5 3.1L6 8.7l-2.8 1.4.5-3.1L1.5 4.9l3.1-.5L6 1.5z" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linejoin="round"/>
+        </svg>
+        <span>텍스트를 드래그하면 원하는 부분만 선택·복사할 수 있습니다.</span>
+      </div>
+    </div>
+  </div>
 
   <!-- Keyboard shortcut help modal -->
   <div class="modal" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle" hidden>
@@ -1483,7 +1839,12 @@ function renderCardsHtml(data, rows, terms) {
     const revDate = row["최종개정일자"] || "";
     const orgHierarchy = mergeOrgHierarchy(row);
 
-    html += '<div class="card">';
+    // 카드 본체 자체가 모달 트리거 — 작은 우측 패널보다 큰 모달이 가독성·복사
+    // 모두 우월하다는 사용자 결정. 인터랙티브 자식 (button/summary/a/.attach-block)은
+    // messages click delegate 가 알아서 거른다.
+    const rowJson = JSON.stringify(row).replace(/"/g, "&quot;");
+    const sp = data.searchParams ? JSON.stringify(data.searchParams).replace(/"/g, "&quot;") : "{}";
+    html += `<div class="card clickable" data-row-json="${rowJson}" data-search-params="${sp}" tabindex="0" role="button" aria-label="${esc(specNo || title)} 상세 정보 보기">`;
     html += '<div class="card-head">';
     if (specNo) html += `<button type="button" class="spec-no copyable" data-copy="${esc(specNo)}" title="규격번호 복사" aria-label="규격번호 ${esc(specNo)} 복사">${esc(specNo)}</button>`;
     if (specKind) html += `<span class="spec-kind">${esc(specKind)}</span>`;
@@ -1531,6 +1892,8 @@ function renderCardsHtml(data, rows, terms) {
       html += `</div>`;
     }
 
+    // 카드 본체가 클릭 가능함을 사용자에게 알려주는 hint
+    html += `<div class="card-tap-hint" aria-hidden="true">상세 정보 보기 <svg class="ct-chev" width="6" height="10" viewBox="0 0 6 10"><path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>`;
     html += "</div>";
   });
   return html;
@@ -2372,8 +2735,10 @@ function addTyping() {
   div.id = id;
   div.setAttribute("aria-live", "polite");
   div.innerHTML = `<div class="avatar" aria-hidden="true">🤖</div><div class="bubble">
-    <div class="search-status"><div class="spinner" aria-hidden="true"></div>KDSIS에서 검색하고 있습니다…</div>
-    <div class="skeleton-cards" aria-hidden="true">${skeletonCard()}${skeletonCard()}</div>
+    <div class="search-status"><div class="spinner" aria-hidden="true"></div>KDSIS에서 규격 정보를 조회 중…</div>
+    <div class="search-progress" aria-hidden="true"></div>
+    <div class="search-time" aria-hidden="true">처음 검색은 5–10초가 걸릴 수 있습니다</div>
+    <div class="skeleton-cards" aria-hidden="true" style="margin-top:.75rem">${skeletonCard()}${skeletonCard()}</div>
   </div>`;
   messages.appendChild(div);
   return id;
@@ -2495,6 +2860,475 @@ function restoreSession() {
   messages.style.scrollBehavior = prev || "smooth";
   scrollBottom(true);
 }
+
+// ── Sidebar (slide-in sheet) ───────────────────────────────────────────
+const sidebarEl = document.getElementById("sidebar");
+const sidebarBackdrop = document.getElementById("sidebarBackdrop");
+const menuBtn = document.getElementById("menuBtn");
+const sidebarCloseBtn = document.getElementById("sidebarCloseBtn");
+const sbRecentList = document.getElementById("sbRecentList");
+const sbSearchInput = document.getElementById("sbSearchInput");
+const sbNewChatBtn = document.getElementById("sbNewChatBtn");
+const sbFeedbackBtn = document.getElementById("sbFeedbackBtn");
+
+function renderSidebarRecents(filter) {
+  if (!sbRecentList) return;
+  const list = (typeof loadRecent === "function" ? loadRecent() : []).slice(0, 30);
+  const q = (filter || "").trim().toLowerCase();
+  const items = q ? list.filter(t => t.toLowerCase().includes(q)) : list;
+  if (items.length === 0) {
+    sbRecentList.innerHTML = `<div class="sb-empty">${q ? "검색 결과 없음" : "최근 대화가 없습니다"}</div>`;
+    return;
+  }
+  sbRecentList.innerHTML = items.map((text, i) => {
+    const safe = String(text).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    return `<button class="sb-item" type="button" data-idx="${i}" data-text="${safe}">
+      <div class="sb-item-title">${safe}</div>
+      <div class="sb-item-meta">최근 검색</div>
+    </button>`;
+  }).join("");
+  sbRecentList.querySelectorAll(".sb-item").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const text = btn.dataset.text || "";
+      closeSidebar();
+      if (text) {
+        input.value = text;
+        input.focus();
+        // Submit to run the same flow as recent panel
+        try { form.requestSubmit ? form.requestSubmit() : form.submit(); } catch (e) {}
+      }
+    });
+  });
+}
+function openSidebar() {
+  if (!sidebarEl) return;
+  sidebarBackdrop.hidden = false;
+  sidebarEl.hidden = false;
+  // Trigger transition after the element is mounted (next frame)
+  requestAnimationFrame(() => sidebarEl.classList.add("open"));
+  if (menuBtn) menuBtn.setAttribute("aria-expanded", "true");
+  renderSidebarRecents(sbSearchInput && sbSearchInput.value);
+}
+function closeSidebar() {
+  if (!sidebarEl) return;
+  sidebarEl.classList.remove("open");
+  if (menuBtn) menuBtn.setAttribute("aria-expanded", "false");
+  // Wait for slide-out, then unmount
+  setTimeout(() => {
+    sidebarEl.hidden = true;
+    sidebarBackdrop.hidden = true;
+  }, 260);
+}
+// Desktop dock vs mobile slide — the hamburger flips between collapse-toggle
+// and slide-open depending on viewport width. matchMedia keeps it reactive
+// when the user resizes between modes.
+const mqDesktop = window.matchMedia("(min-width: 1024px)");
+const isDesktopVP = () => mqDesktop.matches;
+function applySidebarMode() {
+  if (!sidebarEl) return;
+  if (isDesktopVP()) {
+    // Always mounted on desktop; visibility is controlled by .collapsed.
+    sidebarEl.hidden = false;
+    sidebarEl.classList.remove("open"); // mobile-only state
+    if (sidebarBackdrop) sidebarBackdrop.hidden = true;
+    sidebarEl.classList.toggle("collapsed",
+      document.documentElement.classList.contains("sb-collapsed"));
+    renderSidebarRecents(sbSearchInput && sbSearchInput.value);
+  } else {
+    // Mobile: collapse class is meaningless here.
+    sidebarEl.classList.remove("collapsed");
+    if (!sidebarEl.classList.contains("open")) {
+      sidebarEl.hidden = true;
+      if (sidebarBackdrop) sidebarBackdrop.hidden = true;
+    }
+  }
+}
+if (mqDesktop.addEventListener) mqDesktop.addEventListener("change", applySidebarMode);
+else if (mqDesktop.addListener) mqDesktop.addListener(applySidebarMode);
+applySidebarMode();
+
+if (menuBtn) menuBtn.addEventListener("click", () => {
+  if (isDesktopVP()) {
+    const isCollapsed = sidebarEl.classList.toggle("collapsed");
+    document.documentElement.classList.toggle("sb-collapsed", isCollapsed);
+    try { localStorage.setItem("kdsis-sb-collapsed", isCollapsed ? "1" : "0"); } catch (e) {}
+    if (menuBtn) menuBtn.setAttribute("aria-expanded", String(!isCollapsed));
+  } else {
+    openSidebar();
+  }
+});
+if (sidebarCloseBtn) sidebarCloseBtn.addEventListener("click", closeSidebar);
+if (sidebarBackdrop) sidebarBackdrop.addEventListener("click", closeSidebar);
+if (sbSearchInput) sbSearchInput.addEventListener("input", () => renderSidebarRecents(sbSearchInput.value));
+if (sbNewChatBtn) sbNewChatBtn.addEventListener("click", () => {
+  closeSidebar();
+  // Trigger the existing reset flow so all state stays consistent
+  if (resetBtn) resetBtn.click();
+});
+
+// ── Feedback modal (5-star + anonymous comment → POST /api/feedback) ──
+const feedbackModal = document.getElementById("feedbackModal");
+const fbStarsRoot = document.getElementById("fbStars");
+const fbStarReadout = document.getElementById("fbStarReadout");
+const fbCommentEl = document.getElementById("fbComment");
+const fbCounterNow = document.getElementById("fbCounterNow");
+const fbSubmitBtn = document.getElementById("fbSubmitBtn");
+const feedbackForm = document.getElementById("feedbackForm");
+let fbRating = 0;
+const FB_LABELS = ["미평가", "매우 불만족", "불만족", "보통", "만족", "매우 만족"];
+
+function renderFbStars(hover) {
+  if (!fbStarsRoot) return;
+  const active = hover || fbRating;
+  const stars = fbStarsRoot.querySelectorAll(".fb-star");
+  stars.forEach((s, i) => {
+    const v = i + 1;
+    s.classList.toggle("fb-on", !hover && v <= fbRating);
+    s.classList.toggle("fb-hover", !!hover && v <= hover);
+    s.setAttribute("aria-checked", String(v === fbRating));
+  });
+  fbStarReadout.textContent = active ? FB_LABELS[active] : FB_LABELS[fbRating];
+  if (fbSubmitBtn) fbSubmitBtn.disabled = !(fbRating >= 1);
+}
+function setFbRating(v) {
+  fbRating = Math.max(0, Math.min(5, parseInt(v, 10) || 0));
+  renderFbStars(0);
+}
+if (fbStarsRoot) {
+  fbStarsRoot.querySelectorAll(".fb-star").forEach(btn => {
+    btn.addEventListener("click", () => setFbRating(btn.dataset.val));
+    btn.addEventListener("mouseenter", () => renderFbStars(parseInt(btn.dataset.val, 10) || 0));
+    btn.addEventListener("focus", () => renderFbStars(parseInt(btn.dataset.val, 10) || 0));
+    btn.addEventListener("mouseleave", () => renderFbStars(0));
+    btn.addEventListener("blur", () => renderFbStars(0));
+    // Keyboard: arrow keys move selection one star at a time
+    btn.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const next = Math.min(5, (parseInt(btn.dataset.val, 10) || 0) + 1);
+        const t = fbStarsRoot.querySelector(`.fb-star[data-val="${next}"]`);
+        if (t) { t.focus(); setFbRating(next); }
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+        e.preventDefault();
+        const prev = Math.max(1, (parseInt(btn.dataset.val, 10) || 0) - 1);
+        const t = fbStarsRoot.querySelector(`.fb-star[data-val="${prev}"]`);
+        if (t) { t.focus(); setFbRating(prev); }
+      }
+    });
+  });
+}
+if (fbCommentEl && fbCounterNow) {
+  fbCommentEl.addEventListener("input", () => {
+    fbCounterNow.textContent = String(fbCommentEl.value.length);
+  });
+}
+
+function openFeedbackModal() {
+  if (!feedbackModal) return;
+  setFbRating(0);
+  if (fbCommentEl) { fbCommentEl.value = ""; }
+  if (fbCounterNow) fbCounterNow.textContent = "0";
+  feedbackModal.hidden = false;
+  // Focus first star for keyboard users
+  setTimeout(() => {
+    const first = fbStarsRoot && fbStarsRoot.querySelector(".fb-star");
+    if (first) first.focus();
+  }, 30);
+}
+function closeFeedbackModal() {
+  if (!feedbackModal) return;
+  feedbackModal.hidden = true;
+}
+if (sbFeedbackBtn) sbFeedbackBtn.addEventListener("click", () => {
+  closeSidebar();
+  // Wait for sidebar slide-out so focus order stays clean
+  setTimeout(openFeedbackModal, 280);
+});
+if (feedbackModal) {
+  feedbackModal.addEventListener("click", (e) => {
+    if (e.target.matches("[data-modal-close]")) closeFeedbackModal();
+  });
+}
+if (feedbackForm) {
+  feedbackForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (fbRating < 1 || !fbSubmitBtn) return;
+    const comment = (fbCommentEl && fbCommentEl.value || "").trim();
+    fbSubmitBtn.disabled = true;
+    const original = fbSubmitBtn.textContent;
+    fbSubmitBtn.textContent = "보내는 중…";
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rating: fbRating, comment }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { const d = await res.json(); if (d && d.error) msg = d.error; } catch (e) {}
+        throw new Error(msg);
+      }
+      toast("피드백 감사합니다", "success", 2400);
+      closeFeedbackModal();
+    } catch (err) {
+      toast(`전송 실패: ${err.message || err}`, "error", 3000);
+      fbSubmitBtn.disabled = false;
+      fbSubmitBtn.textContent = original || "피드백 보내기";
+      return;
+    }
+    fbSubmitBtn.textContent = original || "피드백 보내기";
+  });
+}
+
+// Esc closes sidebar (in addition to existing modal close handlers)
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (sidebarEl && !sidebarEl.hidden && !isDesktopVP()) { closeSidebar(); }
+});
+
+// ── Detail modal — large centered popup for a row ──────────────────────
+// 우측 좁은 패널 대신 화면 중앙 큰 모달로 노출. 카드 본체 click → 모달 open.
+// 인터랙티브 자식 (spec-no 복사 버튼, attach-load-btn, KDSIS 외부 링크,
+// summary, anchor) 클릭 시에는 모달이 안 열리도록 closest(...) 로 거른다.
+const detailModal = document.getElementById("detailModal");
+const dmSpecNo = document.getElementById("dmSpecNo");
+const dmStatus = document.getElementById("dmStatus");
+const dmTitle = document.getElementById("dmTitle");
+const dmBasic = document.getElementById("dmBasic");
+const dmAllFields = document.getElementById("dmAllFields");
+const dmAttach = document.getElementById("dmAttach");
+const PRIMARY_FIELD_LIST = ["규격번호","규격종류","규격서명","상태","제정기관","적용장비명","재고번호(NSN)","부품관리번호","제정일자","최종개정일자"];
+let _dmCurrent = null;
+
+function _humanFileSize(bytes) {
+  if (typeof bytes !== "number" || !isFinite(bytes) || bytes <= 0) return "";
+  const u = ["B","KB","MB","GB"];
+  let v = bytes, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${u[i]}`;
+}
+function _isMonoLabel(label) {
+  return /번호|일자|NSN|코드|차수|ICS/.test(label);
+}
+function _fieldRowHtml(label, value) {
+  const safeLabel = esc(String(label));
+  const safeValue = esc(String(value || ""));
+  const cls = "dm-field-value" + (_isMonoLabel(label) ? " mono" : "");
+  return `<div class="dm-field">
+    <div class="dm-field-label">${safeLabel}</div>
+    <div class="${cls}">${safeValue}</div>
+    <button type="button" class="dm-action dm-field-copy" data-copy-label="${safeLabel}" data-copy-value="${safeValue}" style="padding:3px 7px;font-size:.6875rem">복사</button>
+  </div>`;
+}
+
+function openDetailModal(row, searchParams) {
+  if (!detailModal || !row) return;
+  _dmCurrent = { row, searchParams: searchParams || {} };
+  const specNo = row["규격번호"] || "";
+  const title = row["규격서명"] || row["품명"] || "(제목 없음)";
+  const status = row["상태"] || "";
+  if (dmSpecNo) dmSpecNo.textContent = specNo || "—";
+  if (dmStatus) dmStatus.innerHTML = status
+    ? `<span class="status-badge ${statusClass(status)}">${esc(status)}</span>` : "";
+  if (dmTitle) dmTitle.textContent = title;
+
+  // 기본 정보 — PRIMARY_FIELD_LIST 순서 보존
+  let basicHtml = "";
+  PRIMARY_FIELD_LIST.forEach(k => {
+    const v = row[k];
+    if (typeof isEmpty === "function" ? isEmpty(v) : !v) return;
+    basicHtml += _fieldRowHtml(k, v);
+  });
+  if (dmBasic) dmBasic.innerHTML = basicHtml || `<div class="dm-attach-empty">표시할 정보가 없습니다</div>`;
+
+  // 전체 필드 — PRIMARY 제외, 빈 값 제외, 원본 컬럼 순서 유지
+  let allHtml = "";
+  Object.keys(row).forEach(k => {
+    if (PRIMARY_FIELD_LIST.indexOf(k) >= 0) return;
+    const v = row[k];
+    if (typeof isEmpty === "function" ? isEmpty(v) : !v) return;
+    allHtml += _fieldRowHtml(k, v);
+  });
+  if (dmAllFields) dmAllFields.innerHTML = allHtml || `<div class="dm-attach-empty">추가 필드 없음</div>`;
+
+  // 첨부 lazy load — 기존 /api/detail 캐시 공유
+  loadDetailModalAttachments(specNo, _dmCurrent.searchParams);
+
+  detailModal.hidden = false;
+  // Focus the close button so Esc/Enter behave naturally
+  setTimeout(() => {
+    const closeBtn = detailModal.querySelector("[data-modal-close]");
+    if (closeBtn) closeBtn.focus();
+  }, 30);
+}
+
+function closeDetailModal() {
+  if (!detailModal) return;
+  detailModal.hidden = true;
+  _dmCurrent = null;
+}
+
+async function loadDetailModalAttachments(specNo, params) {
+  if (!dmAttach) return;
+  if (!specNo) {
+    dmAttach.innerHTML = `<div class="dm-attach-empty">규격번호가 없어 첨부를 조회할 수 없습니다</div>`;
+    return;
+  }
+  dmAttach.innerHTML = `<div class="dm-loading">첨부파일을 불러오는 중…</div>`;
+  try {
+    const qs = `params=${encodeURIComponent(JSON.stringify(params || {}))}&key=${encodeURIComponent(specNo)}`;
+    const res = await fetch(`/api/detail?${qs}`);
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const d = await res.json(); if (d && d.error) msg = d.error; } catch (e) {}
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    const atts = (data && data.attachments) || [];
+    if (atts.length === 0) {
+      dmAttach.innerHTML = `<div class="dm-attach-empty">첨부파일이 없습니다</div>`;
+      return;
+    }
+    let html = '<div class="dm-attach-list">';
+    atts.forEach(a => {
+      const aqs = `params=${encodeURIComponent(JSON.stringify(params || {}))}&key=${encodeURIComponent(specNo)}&id=${encodeURIComponent(a.id || "")}`;
+      const sizeStr = (typeof a.size === "number" && a.size > 0)
+        ? _humanFileSize(a.size) : (a.sizeText || "스트리밍");
+      const ext = ((a.name || "").split(".").pop() || "FILE").toUpperCase().slice(0, 4);
+      html += `<div class="dm-attach-item">
+        <div class="dm-attach-icon">${esc(ext)}</div>
+        <div class="dm-attach-meta">
+          <div class="dm-attach-name">${esc(a.name || "(이름 없음)")}</div>
+          <div class="dm-attach-sub">${esc(sizeStr)}</div>
+        </div>
+        <a class="dm-attach-dl" href="/api/attachment?${aqs}" download aria-label="${esc(a.name || "")} 다운로드" title="다운로드">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M7 1v9M3 7l4 4 4-4M2 13h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </a>
+      </div>`;
+    });
+    html += `</div>`;
+    dmAttach.innerHTML = html;
+  } catch (err) {
+    dmAttach.innerHTML = `<div class="dm-error">첨부 조회 실패: ${esc(err && err.message || String(err))}</div>`;
+  }
+}
+
+if (detailModal) {
+  detailModal.addEventListener("click", (e) => {
+    if (e.target.closest("[data-modal-close]")) { closeDetailModal(); return; }
+    const copyBtn = e.target.closest(".dm-field-copy");
+    if (copyBtn) {
+      const k = copyBtn.dataset.copyLabel || "";
+      const v = copyBtn.dataset.copyValue || "";
+      try { navigator.clipboard && navigator.clipboard.writeText(`${k}: ${v}`); } catch (e) {}
+      copyBtn.classList.add("copied");
+      const orig = copyBtn.textContent;
+      copyBtn.textContent = "복사됨";
+      setTimeout(() => { copyBtn.classList.remove("copied"); copyBtn.textContent = orig || "복사"; }, 1400);
+      return;
+    }
+  });
+  const dmCopyAll = document.getElementById("dmCopyAll");
+  if (dmCopyAll) dmCopyAll.addEventListener("click", () => {
+    if (!_dmCurrent) return;
+    const lines = Object.entries(_dmCurrent.row)
+      .filter(([_, v]) => !(typeof isEmpty === "function" ? isEmpty(v) : !v))
+      .map(([k, v]) => `${k}: ${v}`)
+      .join("\n");
+    try { navigator.clipboard && navigator.clipboard.writeText(lines); } catch (e) {}
+    toast("전체 정보가 복사되었습니다", "success");
+  });
+  const dmCopyJson = document.getElementById("dmCopyJson");
+  if (dmCopyJson) dmCopyJson.addEventListener("click", () => {
+    if (!_dmCurrent) return;
+    try { navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(_dmCurrent.row, null, 2)); } catch (e) {}
+    toast("JSON이 복사되었습니다", "success");
+  });
+  const dmOpenKdsis = document.getElementById("dmOpenKdsis");
+  if (dmOpenKdsis) dmOpenKdsis.addEventListener("click", () => {
+    if (!_dmCurrent) return;
+    const specNo = _dmCurrent.row["규격번호"];
+    if (!specNo) return;
+    try { navigator.clipboard && navigator.clipboard.writeText(specNo); } catch (e) {}
+    const url = (typeof KDSIS_PORTAL_URL === "string" && KDSIS_PORTAL_URL)
+      ? KDSIS_PORTAL_URL : "https://kdsis.dapa.go.kr/";
+    window.open(url, "_blank", "noopener");
+    toast(`${specNo} 복사됨 — KDSIS 새 탭이 열렸습니다`, "info");
+  });
+  const dmDownloadAll = document.getElementById("dmDownloadAll");
+  if (dmDownloadAll) dmDownloadAll.addEventListener("click", async () => {
+    if (!_dmCurrent) return;
+    const specNo = _dmCurrent.row["규격번호"];
+    if (!specNo) { toast("규격번호가 없어 묶음 다운로드를 받을 수 없습니다", "error"); return; }
+    const original = dmDownloadAll.querySelector("span")?.textContent || "전체 다운로드";
+    const span = dmDownloadAll.querySelector("span");
+    if (span) span.textContent = "묶는 중…";
+    dmDownloadAll.disabled = true;
+    try {
+      const res = await fetch("/api/download/bundle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ params: _dmCurrent.searchParams || {}, keys: [specNo] }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { const d = await res.json(); if (d && d.error) msg = d.error; } catch (e) {}
+        throw new Error(msg);
+      }
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+      const fname = m ? decodeURIComponent(m[1]) : `${specNo}.zip`;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = fname;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 200);
+      toast(`${fname} 다운로드 시작`, "success");
+    } catch (err) {
+      toast(`다운로드 실패: ${err.message || err}`, "error", 4000);
+    } finally {
+      if (span) span.textContent = original;
+      dmDownloadAll.disabled = false;
+    }
+  });
+}
+
+// Card body click → open detail modal (delegated on .messages)
+messages.addEventListener("click", (e) => {
+  const card = e.target.closest(".card.clickable");
+  if (!card) return;
+  // Inner interactive elements should NOT trigger the modal — they have
+  // their own handlers (spec-no copy, attach-load-btn, KDSIS external link,
+  // <details> summary, <a> tags).
+  if (e.target.closest("button, summary, a, input, label, .attach-block, .attach-panel, [contenteditable]")) return;
+  const json = card.getAttribute("data-row-json");
+  const params = card.getAttribute("data-search-params") || "{}";
+  if (!json) return;
+  try {
+    const decode = (s) => s.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+    const row = JSON.parse(decode(json));
+    const sp = JSON.parse(decode(params));
+    openDetailModal(row, sp);
+  } catch (err) {
+    console.warn("[detail] failed to open modal:", err);
+  }
+});
+// Keyboard: Enter / Space on focused card opens modal
+messages.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const card = e.target.closest && e.target.closest(".card.clickable");
+  if (!card || !card.matches(":focus")) return;
+  if (e.target !== card) return;
+  e.preventDefault();
+  card.click();
+});
+// Esc closes detail modal
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && detailModal && !detailModal.hidden) closeDetailModal();
+});
 
 // If the page loaded with a share hash, run that search instead of
 // restoring the stale session. This is what makes shared links work.
