@@ -122,8 +122,13 @@
     .dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
 
     /* Search status */
-    .search-status{display:flex;align-items:center;gap:.5rem;font-size:.8125rem;color:var(--primary);margin-bottom:.75rem;font-weight:500}
+    .search-status{display:flex;align-items:center;gap:.5rem;font-size:.8125rem;color:var(--primary);margin-bottom:.5rem;font-weight:500;letter-spacing:-.01em}
     .search-status .spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
+    /* 시안 Screen 2 — 한 줄 상태 아래 미세 진행 바 + mono 안내 한 줄 */
+    .search-progress{margin-top:.5rem;height:2px;border-radius:1px;background:var(--surface-alt);overflow:hidden;position:relative}
+    .search-progress::before{content:"";position:absolute;left:-40%;top:0;bottom:0;width:40%;background:var(--primary);border-radius:1px;animation:searchProgressSlide 1.4s ease-in-out infinite}
+    @keyframes searchProgressSlide{0%{left:-40%}100%{left:100%}}
+    .search-time{margin-top:.5rem;font-family:var(--mono);font-size:.6875rem;color:var(--text-tertiary);letter-spacing:0}
     .search-params{display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.75rem}
     .param-tag{font-size:.75rem;padding:3px 10px;background:var(--primary-tint);color:var(--primary);border-radius:var(--r-full);font-weight:500}
     .batch-query-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;padding:.5rem .75rem;background:var(--primary-tint);border-radius:var(--r-md);font-size:.8125rem;font-weight:600;color:var(--primary)}
@@ -778,6 +783,10 @@
           <button type="button" class="dm-action" id="dmOpenKdsis">
             <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M5 2H3a1 1 0 00-1 1v6a1 1 0 001 1h6a1 1 0 001-1V7M7 2h3v3M5 7l5-5" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <span>KDSIS에서 열기</span>
+          </button>
+          <button type="button" class="dm-action" id="dmDownloadAll" title="이 행의 첨부 + KDSIS 엑셀을 ZIP으로 묶어 받습니다">
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 1v9M3 7l4 4 4-4M2 13h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>전체 다운로드</span>
           </button>
         </div>
       </header>
@@ -2726,8 +2735,10 @@ function addTyping() {
   div.id = id;
   div.setAttribute("aria-live", "polite");
   div.innerHTML = `<div class="avatar" aria-hidden="true">🤖</div><div class="bubble">
-    <div class="search-status"><div class="spinner" aria-hidden="true"></div>KDSIS에서 검색하고 있습니다…</div>
-    <div class="skeleton-cards" aria-hidden="true">${skeletonCard()}${skeletonCard()}</div>
+    <div class="search-status"><div class="spinner" aria-hidden="true"></div>KDSIS에서 규격 정보를 조회 중…</div>
+    <div class="search-progress" aria-hidden="true"></div>
+    <div class="search-time" aria-hidden="true">처음 검색은 5–10초가 걸릴 수 있습니다</div>
+    <div class="skeleton-cards" aria-hidden="true" style="margin-top:.75rem">${skeletonCard()}${skeletonCard()}</div>
   </div>`;
   messages.appendChild(div);
   return id;
@@ -3245,6 +3256,43 @@ if (detailModal) {
       ? KDSIS_PORTAL_URL : "https://kdsis.dapa.go.kr/";
     window.open(url, "_blank", "noopener");
     toast(`${specNo} 복사됨 — KDSIS 새 탭이 열렸습니다`, "info");
+  });
+  const dmDownloadAll = document.getElementById("dmDownloadAll");
+  if (dmDownloadAll) dmDownloadAll.addEventListener("click", async () => {
+    if (!_dmCurrent) return;
+    const specNo = _dmCurrent.row["규격번호"];
+    if (!specNo) { toast("규격번호가 없어 묶음 다운로드를 받을 수 없습니다", "error"); return; }
+    const original = dmDownloadAll.querySelector("span")?.textContent || "전체 다운로드";
+    const span = dmDownloadAll.querySelector("span");
+    if (span) span.textContent = "묶는 중…";
+    dmDownloadAll.disabled = true;
+    try {
+      const res = await fetch("/api/download/bundle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ params: _dmCurrent.searchParams || {}, keys: [specNo] }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { const d = await res.json(); if (d && d.error) msg = d.error; } catch (e) {}
+        throw new Error(msg);
+      }
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+      const fname = m ? decodeURIComponent(m[1]) : `${specNo}.zip`;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = fname;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 200);
+      toast(`${fname} 다운로드 시작`, "success");
+    } catch (err) {
+      toast(`다운로드 실패: ${err.message || err}`, "error", 4000);
+    } finally {
+      if (span) span.textContent = original;
+      dmDownloadAll.disabled = false;
+    }
   });
 }
 
